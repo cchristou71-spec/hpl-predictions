@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-title" content="HPL Predictions"/>
 <meta name="theme-color" content="#0F172A"/>
-<title>HPL Predictions</title>
+<title>HPL Predictions v1.35.0</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-tap-highlight-color:transparent}
@@ -192,15 +192,12 @@ function Badge({team, size=24}){
 async function liveRefresh(fixtures) {
   try {
     const today = new Date().toISOString().split("T")[0];
-    const prompt = `Search for the latest Premier League 2025-26 season fixtures and results for the most recent and upcoming match weeks.
-Return ONLY a valid JSON array. No explanation, no markdown. Start with [ end with ].
-Each object: {"home":"TeamName","away":"TeamName","date":"YYYY-MM-DD","time":"HH:MM","homeGoals":N_or_null,"awayGoals":N_or_null}
-Rules:
-- homeGoals/awayGoals: integer if FULLY FINISHED (final whistle blown), null if not played or in progress
-- Do NOT include scores for matches currently in progress
-- Include all matches from the last 2 matchweeks plus upcoming matchweek
-- Today is ${today}
-- Team names must be exactly: Arsenal, Aston Villa, Bournemouth, Brentford, Brighton, Burnley, Chelsea, Crystal Palace, Everton, Fulham, Leeds, Liverpool, Man City, Man Utd, Newcastle, Nottm Forest, Sunderland, Spurs, West Ham, Wolves`;
+    const prompt = `Search for Premier League 2025-26 results for the last 2 match weeks. Today is ${today}.
+YOU MUST respond with ONLY a JSON array, nothing else. No words before or after. Start your response with [ and end with ].
+Format: [{"home":"Arsenal","away":"Chelsea","date":"2026-05-01","time":"15:00","homeGoals":2,"awayGoals":1},...]
+- homeGoals/awayGoals: number if finished, null if not played yet or in progress right now
+- Only include matches that have FULLY finished (not in progress)
+- Team names: Arsenal, Aston Villa, Bournemouth, Brentford, Brighton, Burnley, Chelsea, Crystal Palace, Everton, Fulham, Leeds, Liverpool, Man City, Man Utd, Newcastle, Nottm Forest, Sunderland, Spurs, West Ham, Wolves`;
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -208,6 +205,7 @@ Rules:
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
         max_tokens: 3000,
+        system: "You are a data API. You ONLY output valid JSON arrays. Never output any text, explanation or markdown. Your entire response must be a JSON array starting with [ and ending with ].",
         tools: [{ type: "web_search_20250305", name: "web_search" }],
         messages: [{ role: "user", content: prompt }]
       })
@@ -672,16 +670,16 @@ const SEASON_FIXTURES = {
   {home:"Man Utd",away:"Brentford",date:"2026-04-27",time:"20:00"},
 ],
 35:[
-  {home:"Leeds",away:"Burnley",date:"2026-05-02",time:"20:00"},
-  {home:"Everton",away:"Sunderland",date:"2026-05-03",time:"12:30"},
-  {home:"Bournemouth",away:"Chelsea",date:"2026-05-03",time:"15:00"},
-  {home:"Spurs",away:"Crystal Palace",date:"2026-05-03",time:"15:00"},
-  {home:"Wolves",away:"Aston Villa",date:"2026-05-03",time:"15:00"},
-  {home:"Liverpool",away:"Brentford",date:"2026-05-03",time:"17:30"},
-  {home:"Man City",away:"Newcastle",date:"2026-05-04",time:"14:00"},
-  {home:"Nottm Forest",away:"West Ham",date:"2026-05-04",time:"14:00"},
-  {home:"Brighton",away:"Man Utd",date:"2026-05-04",time:"16:30"},
-  {home:"Arsenal",away:"Fulham",date:"2026-05-04",time:"19:00"},
+  {home:"Leeds",away:"Burnley",date:"2026-05-01",time:"20:00"},
+  {home:"Brentford",away:"West Ham",date:"2026-05-02",time:"15:00"},
+  {home:"Newcastle",away:"Brighton",date:"2026-05-02",time:"15:00"},
+  {home:"Wolves",away:"Sunderland",date:"2026-05-02",time:"15:00"},
+  {home:"Arsenal",away:"Fulham",date:"2026-05-02",time:"17:30"},
+  {home:"Bournemouth",away:"Crystal Palace",date:"2026-05-03",time:"15:00"},
+  {home:"Man Utd",away:"Liverpool",date:"2026-05-03",time:"17:30"},
+  {home:"Aston Villa",away:"Spurs",date:"2026-05-03",time:"19:45"},
+  {home:"Chelsea",away:"Nottm Forest",date:"2026-05-04",time:"14:00"},
+  {home:"Everton",away:"Man City",date:"2026-05-04",time:"16:30"},
 ],
 36:[
   {home:"Arsenal",away:"West Ham",date:"2026-05-09",time:"15:00"},
@@ -1022,7 +1020,7 @@ function App(){
         <div style={S.hdrIn}>
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             <div style={S.badge}>⚽</div>
-            <div><div style={S.title}>HPL Predictions</div><div style={S.sub}>2025/26 Season</div></div>
+            <div><div style={S.title}>HPL Predictions</div><div style={S.sub}>2025/26 · <span style={{color:"#7C3AED"}}>Updated 28 Apr 2026</span></div></div>
           </div>
           {me&&<div style={S.chip}><span style={S.dot}/>{me}</div>}
         </div>
@@ -1212,9 +1210,9 @@ function Predict({fixtures,displayFixtures,predictions,reveals,deadlines,players
         const pred=merged(fx.id);
         const isJ=pred.joker||(jUsed&&ep[fx.id]?.joker&&!draft[fx.id]);
         // Lock if: current MW past deadline OR current MW revealed OR original MW revealed (fixture moved)
-        const originalMWRevealed = reveals[fx.mw];
-        const alreadyPredicted = !!(ep[fx.id]);
-        const off=past||revealed||originalMWRevealed||(alreadyPredicted&&originalMWRevealed);
+        // For moved fixtures, also lock if the original MW is revealed
+        const originalMWRevealed = fx.movedMW && reveals[fx.mw];
+        const off=past||revealed||originalMWRevealed;
         const moved=fx.currentDate!==fx.date;
         return(
           <div key={fx.id} style={{...S.fx,borderLeft:isJ?"3px solid #F59E0B":"3px solid #1E293B"}}>
@@ -1240,9 +1238,32 @@ function Predict({fixtures,displayFixtures,predictions,reveals,deadlines,players
               </div>
               {/* Score inputs - fixed width, never shrinks */}
               <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
-                <input type="number" min={0} max={20} disabled={off} value={pred.homeGoals??""} onChange={e=>set_(fx.id,"homeGoals",e.target.value)} style={{...S.gi,...(off?S.giOff:{})}}/>
+                <input type="number" min={0} max={9} inputMode="numeric" disabled={off}
+                  value={pred.homeGoals??""}
+                  onFocus={e=>e.target.select()}
+                  onChange={e=>{
+                    const v=String(e.target.value).slice(-1);
+                    if(v===""||/^[0-9]$/.test(v)){
+                      set_(fx.id,"homeGoals",v);
+                      if(v!==""){
+                        const next=e.target.closest("div").querySelector("input:last-of-type");
+                        if(next)next.focus();
+                      }
+                    }
+                  }}
+                  style={{...S.gi,...(off?S.giOff:{})}}/>
                 <span style={{color:"#7C3AED",fontSize:20,fontWeight:900,width:14,textAlign:"center",flexShrink:0}}>–</span>
-                <input type="number" min={0} max={20} disabled={off} value={pred.awayGoals??""} onChange={e=>set_(fx.id,"awayGoals",e.target.value)} style={{...S.gi,...(off?S.giOff:{})}}/>
+                <input type="number" min={0} max={9} inputMode="numeric" disabled={off}
+                  value={pred.awayGoals??""}
+                  onFocus={e=>e.target.select()}
+                  onChange={e=>{
+                    const v=String(e.target.value).slice(-1);
+                    if(v===""||/^[0-9]$/.test(v)){
+                      set_(fx.id,"awayGoals",v);
+                      if(v!=="")e.target.blur();
+                    }
+                  }}
+                  style={{...S.gi,...(off?S.giOff:{})}}/>
               </div>
               {/* Away team - left aligned */}
               <div style={{flex:1,display:"flex",alignItems:"center",gap:4,minWidth:0}}>
@@ -1361,11 +1382,11 @@ function Results({fixtures,displayFixtures,predictions,reveals,players,jokers,me
                       {sn(fx.home)}<Badge team={fx.home} size={22}/>
                     </span>
                     <span style={{fontSize:18,fontWeight:800,color:"#34D399",width:26,textAlign:"center",flexShrink:0}}>
-                      {fx.result&&revealed?fx.result.homeGoals:"–"}
+                      {fx.result?fx.result.homeGoals:"–"}
                     </span>
                     <span style={{fontSize:16,fontWeight:700,color:"#475569"}}>|</span>
                     <span style={{fontSize:18,fontWeight:800,color:"#34D399",width:26,textAlign:"center",flexShrink:0}}>
-                      {fx.result&&revealed?fx.result.awayGoals:"–"}
+                      {fx.result?fx.result.awayGoals:"–"}
                     </span>
                     <span style={{flex:1,fontSize:13,fontWeight:600,color:"#CBD5E1",display:"flex",alignItems:"center",gap:6}}>
                       <Badge team={fx.away} size={22}/>{fx.away}
@@ -1464,11 +1485,11 @@ function Results({fixtures,displayFixtures,predictions,reveals,players,jokers,me
                         <Badge team={fx.home} size={22}/>{fx.home}
                       </span>
                       <span style={{fontSize:18,fontWeight:800,color:"#34D399",minWidth:18,textAlign:"center"}}>
-                        {fx.result&&revealed ? fx.result.homeGoals : "–"}
+                        {fx.result ? fx.result.homeGoals : "–"}
                       </span>
                       <span style={{fontSize:16,fontWeight:700,color:"#475569",width:12,textAlign:"center"}}>|</span>
                       <span style={{fontSize:18,fontWeight:800,color:"#34D399",minWidth:18,textAlign:"center"}}>
-                        {fx.result&&revealed ? fx.result.awayGoals : "–"}
+                        {fx.result ? fx.result.awayGoals : "–"}
                       </span>
                       <span style={{flex:1,fontSize:13,fontWeight:600,color:"#CBD5E1",display:"flex",alignItems:"center",gap:5}}>
                         <Badge team={fx.away} size={22}/>{fx.away}
@@ -1896,7 +1917,7 @@ Don't forget to submit your predictions! 🎯`;
 function ShareInstructions({toast_}){
   const[copied,setCopied]=useState(false);
   const[expanded,setExpanded]=useState(false);
-  const url = window.location.href;
+  const url = "https://cchristou71-spec.github.io/hpl-predictions";
 
   const copyUrl=()=>{
     navigator.clipboard.writeText(url)
