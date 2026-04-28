@@ -190,62 +190,69 @@ function Badge({team, size=24}){
 // Live fixture & results refresh using Claude API web search
 // Runs on every app open - fetches last 2 MWs results + upcoming fixture date changes
 async function liveRefresh(fixtures) {
+  // Uses football-data.org free API — supports CORS from browser
+  // API key stored in localStorage so admin can set it once
+  const apiKey = (() => { try { return localStorage.getItem("hpl_fdorg_key") || ""; } catch { return ""; } })();
+  if (!apiKey) return { fixtures, updated: 0, dateChanges: 0, noKey: true };
+
+  // Map football-data.org team names to our short names
+  const FD_MAP = {
+    "Arsenal FC":"Arsenal","AFC Bournemouth":"Bournemouth","Brentford FC":"Brentford",
+    "Brighton & Hove Albion FC":"Brighton","Burnley FC":"Burnley","Chelsea FC":"Chelsea",
+    "Crystal Palace FC":"Crystal Palace","Everton FC":"Everton","Fulham FC":"Fulham",
+    "Leeds United FC":"Leeds","Liverpool FC":"Liverpool","Manchester City FC":"Man City",
+    "Manchester United FC":"Man Utd","Newcastle United FC":"Newcastle",
+    "Nottingham Forest FC":"Nottm Forest","Sunderland AFC":"Sunderland",
+    "Tottenham Hotspur FC":"Spurs","West Ham United FC":"West Ham",
+    "Wolverhampton Wanderers FC":"Wolves","Aston Villa FC":"Aston Villa",
+  };
+
   try {
-    const today = new Date().toISOString().split("T")[0];
-    const prompt = `Search for Premier League 2025-26 results for the last 2 match weeks. Today is ${today}.
-YOU MUST respond with ONLY a JSON array, nothing else. No words before or after. Start your response with [ and end with ].
-Format: [{"home":"Arsenal","away":"Chelsea","date":"2026-05-01","time":"15:00","homeGoals":2,"awayGoals":1},...]
-- homeGoals/awayGoals: number if finished, null if not played yet or in progress right now
-- Only include matches that have FULLY finished (not in progress)
-- Team names: Arsenal, Aston Villa, Bournemouth, Brentford, Brighton, Burnley, Chelsea, Crystal Palace, Everton, Fulham, Leeds, Liverpool, Man City, Man Utd, Newcastle, Nottm Forest, Sunderland, Spurs, West Ham, Wolves`;
-
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 3000,
-        system: "You are a data API. You ONLY output valid JSON arrays. Never output any text, explanation or markdown. Your entire response must be a JSON array starting with [ and ending with ].",
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        messages: [{ role: "user", content: prompt }]
-      })
-    });
-
-    if (!res.ok) return { fixtures, updated: 0, dateChanges: 0 };
+    // Fetch all matches for 2025-26 PL season
+    const res = await fetch(
+      "https://api.football-data.org/v4/competitions/PL/matches?season=2025",
+      { headers: { "X-Auth-Token": apiKey } }
+    );
+    if (!res.ok) {
+      console.log("football-data.org error:", res.status);
+      return { fixtures, updated: 0, dateChanges: 0, error: `API error ${res.status}` };
+    }
     const data = await res.json();
-
-    const text = (data.content || [])
-      .filter(b => b.type === "text").map(b => b.text).join("");
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return { fixtures, updated: 0, dateChanges: 0 };
-
-    const matches = JSON.parse(jsonMatch[0]);
-    if (!Array.isArray(matches)) return { fixtures, updated: 0, dateChanges: 0 };
+    if (!data.matches) return { fixtures, updated: 0, dateChanges: 0 };
 
     const newFx = JSON.parse(JSON.stringify(fixtures));
     let updated = 0, dateChanges = 0;
 
-    matches.forEach(m => {
-      if (!m.home || !m.away) return;
+    data.matches.forEach(m => {
+      const home = FD_MAP[m.homeTeam?.name] || m.homeTeam?.shortName;
+      const away = FD_MAP[m.awayTeam?.name] || m.awayTeam?.shortName;
+      if (!home || !away) return;
+
+      // Convert UTC to UK time
+      const d = new Date(m.utcDate);
+      const ukOff = (d.getMonth()>=2 && d.getMonth()<=9) ? 60 : 0;
+      d.setMinutes(d.getMinutes() + ukOff);
+      const ukDate = d.toISOString().split("T")[0];
+      const ukTime = d.toISOString().split("T")[1].substring(0,5);
+
       Object.values(newFx).forEach(mwList => {
         mwList.forEach(fx => {
-          if (fx.home !== m.home || fx.away !== m.away) return;
+          if (fx.home !== home || fx.away !== away) return;
           // Update result if finished
-          if (m.homeGoals !== null && m.homeGoals !== undefined &&
-              m.awayGoals !== null && m.awayGoals !== undefined) {
-            const h = parseInt(m.homeGoals), a = parseInt(m.awayGoals);
-            if (!isNaN(h) && !isNaN(a)) {
+          if (m.status === "FINISHED" && m.score?.fullTime) {
+            const h = m.score.fullTime.home, a = m.score.fullTime.away;
+            if (h !== null && a !== null) {
               if (!fx.result || fx.result.homeGoals !== h || fx.result.awayGoals !== a) {
                 fx.result = { homeGoals: h, awayGoals: a };
                 updated++;
               }
             }
           }
-          // Update date/time if changed and not yet played
-          if (m.date && !fx.result) {
-            if (fx.currentDate !== m.date || (m.time && fx.currentTime !== m.time)) {
-              fx.currentDate = m.date;
-              if (m.time) fx.currentTime = m.time;
+          // Update date if rescheduled and not yet played
+          if (!fx.result && (m.status === "SCHEDULED" || m.status === "TIMED")) {
+            if (fx.currentDate !== ukDate || fx.currentTime !== ukTime) {
+              fx.currentDate = ukDate;
+              fx.currentTime = ukTime;
               dateChanges++;
             }
           }
@@ -255,10 +262,10 @@ Format: [{"home":"Arsenal","away":"Chelsea","date":"2026-05-01","time":"15:00","
 
     return { fixtures: newFx, updated, dateChanges };
   } catch(e) {
-    return { fixtures, updated: 0, dateChanges: 0 };
+    console.log("liveRefresh error:", e.message);
+    return { fixtures, updated: 0, dateChanges: 0, error: e.message };
   }
 }
-
 const SEASON_FIXTURES = {
 1:[
   {home:"Liverpool",away:"Bournemouth",date:"2025-08-15",time:"20:00"},
@@ -750,7 +757,7 @@ const REAL_RESULTS = {
 27:[ [1,1],[1,0],[2,1],[2,1],[1,0],[2,1],[1,2],[1,1],[1,4],[2,2] ],
 28:[ [1,0],[2,1],[2,1],[2,1],[1,1],[0,2],[1,0],[1,1],[1,0],[2,0] ],
 29:[ [2,0],[1,4],[0,1],[1,1],[2,1],[0,0],[2,2],[1,1],[1,2],[0,3] ],
-30:[ [2,1],[1,1],[2,1],[1,0],[0,0],[0,1],[2,0],[3,1],[2,0],[2,1] ], // WHam-ManCity, Burnley-Bmouth, CP-Leeds, Forest-Fulham, Sunderland-Brighton, Chelsea-Newcastle 0-1, Arsenal-Everton, ManUtd-AV, Liverpool-Spurs, Brentford-Wolves
+30:[ [1,1],[1,1],[2,1],[1,0],[0,0],[0,1],[2,0],[3,1],[2,0],[2,1] ], // WHam-ManCity, Burnley-Bmouth, CP-Leeds, Forest-Fulham, Sunderland-Brighton, Chelsea-Newcastle 0-1, Arsenal-Everton, ManUtd-AV, Liverpool-Spurs, Brentford-Wolves
 31:[ [2,2],[1,0],[1,1],[2,1],[1,0],[1,0],[2,0],[2,0],[1,1],[2,0] ], // Wolves-Arsenal 2-2(18Feb), Bmouth-MU 1-0, Brighton-Liverpool 1-1, Fulham-Burnley 2-1, Everton-Chelsea 1-0, Leeds-Brentford 1-0, Newcastle-Sunderland 2-0, AV-WHam 3-1, Spurs-Forest 1-1, ManCity-CP 2-0
 32:[ [4,0],[1,2],[2,2],[0,2],[2,0],[2,1],[1,1],[1,0],[0,3],[1,2] ],
 33:[ [0,0],[3,0],[1,2],[2,2],[0,1],[4,1],[4,3],[1,2],[2,1],[0,0] ],
@@ -1038,7 +1045,7 @@ function App(){
         <div style={S.hdrIn}>
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             <div style={S.badge}>⚽</div>
-            <div><div style={S.title}>HPL Predictions</div><div style={S.sub}>2025/26 · <span style={{color:"#7C3AED"}}>Updated 28 Apr 2026 v2</span></div></div>
+            <div><div style={S.title}>HPL Predictions</div><div style={S.sub}>2025/26 · <span style={{color:"#7C3AED"}}>Updated 28 Apr 2026 v4</span></div></div>
           </div>
           {me&&<div style={S.chip}><span style={S.dot}/>{me}</div>}
         </div>
@@ -1718,12 +1725,12 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
       {/* HOW TO SHARE */}
       <ShareInstructions toast_={toast_}/>
 
-      {/* FORCE SYNC */}
+      {/* LIVE DATA */}
       <div style={{...S.card,border:"1px solid #7C3AED44",marginBottom:12}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
           <div>
             <div style={S.ct}>🔄 Live Data</div>
-            <div style={{fontSize:12,color:"#64748B",marginTop:2}}>All predictions sync automatically. Force refresh if needed.</div>
+            <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Predictions sync via Supabase. Results auto-refresh via football-data.org.</div>
           </div>
           <button onClick={()=>{
             setSupaLoading(true);
@@ -1736,6 +1743,20 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
           }} style={{...S.bb,padding:"10px 16px",fontSize:13}}>
             ⟳ Refresh
           </button>
+        </div>
+        <div style={{fontSize:12,color:"#64748B",marginBottom:6}}>
+          football-data.org API key <span style={{color:"#475569"}}>(free from football-data.org → register → copy token)</span>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <input
+            defaultValue={localStorage.getItem("hpl_fdorg_key")||""}
+            placeholder="Paste your football-data.org API token"
+            style={{...S.inp,marginBottom:0,flex:1,fontSize:12}}
+            onChange={e=>{try{localStorage.setItem("hpl_fdorg_key",e.target.value.trim());}catch{}}}
+          />
+        </div>
+        <div style={{fontSize:11,color:"#475569",marginTop:6}}>
+          Free account at football-data.org gives 10 calls/min. Results and fixture dates update automatically on every app open once key is set.
         </div>
       </div>
 
