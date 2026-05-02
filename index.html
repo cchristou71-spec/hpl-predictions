@@ -7,9 +7,7 @@
 <meta name="apple-mobile-web-app-title" content="HPL Predictions"/>
 <meta name="theme-color" content="#0F172A"/>
 <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate"/>
-<meta http-equiv="pragma" content="no-cache"/>
-<meta http-equiv="expires" content="0"/>
-<title>HPL Predictions v5</title>
+<title>HPL Predictions</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-tap-highlight-color:transparent}
@@ -135,12 +133,26 @@ async function loadFromSupabase() {
       joker: r.joker || false,
     };
   });
+  console.log("Loaded predictions from Supabase:", Object.keys(predictions).length, "players,",
+    Object.values(predictions).reduce((a,p)=>a+Object.keys(p).length,0), "predictions");
+
+  // Load results from Supabase (overrides hardcoded REAL_RESULTS)
+  const resultRows = await supa.get("results","select=id,home_goals,away_goals").catch(()=>[]);
+  const supaResults = {};
+  (resultRows||[]).forEach(r=>{supaResults[r.id]={homeGoals:r.home_goals,awayGoals:r.away_goals};});
+
+  // Load football-data.org token
+  const fdToken = await supa.getState("fd_token").catch(()=>null);
+  if(fdToken && typeof fdToken === 'string'){
+    try{ localStorage.setItem("hpl_fdorg_key", fdToken); }catch{}
+  }
 
   return {
     reveals: reveals || {},
     deadlines: deadlines || {},
     pins: pins || {},
     predictions,
+    supaResults,
   };
 }
 
@@ -190,74 +202,93 @@ function Badge({team, size=24}){
 
 
 
-// Live fixture & results refresh using Claude API web search
-// Runs on every app open - fetches last 2 MWs results + upcoming fixture date changes
+// Live fixture & results refresh — runs on every app open
+// Uses ESPN public API — no key needed, free, CORS-friendly
+// Checks all results from last 60 days + future fixture date changes
 async function liveRefresh(fixtures) {
-  // Uses football-data.org free API — supports CORS from browser
-  // API key stored in localStorage so admin can set it once
-  const apiKey = (() => { try { return localStorage.getItem("hpl_fdorg_key") || ""; } catch { return ""; } })();
-  if (!apiKey) return { fixtures, updated: 0, dateChanges: 0, noKey: true };
-
-  // Map football-data.org team names to our short names
-  const FD_MAP = {
-    "Arsenal FC":"Arsenal","AFC Bournemouth":"Bournemouth","Brentford FC":"Brentford",
-    "Brighton & Hove Albion FC":"Brighton","Burnley FC":"Burnley","Chelsea FC":"Chelsea",
-    "Crystal Palace FC":"Crystal Palace","Everton FC":"Everton","Fulham FC":"Fulham",
-    "Leeds United FC":"Leeds","Liverpool FC":"Liverpool","Manchester City FC":"Man City",
-    "Manchester United FC":"Man Utd","Newcastle United FC":"Newcastle",
-    "Nottingham Forest FC":"Nottm Forest","Sunderland AFC":"Sunderland",
-    "Tottenham Hotspur FC":"Spurs","West Ham United FC":"West Ham",
-    "Wolverhampton Wanderers FC":"Wolves","Aston Villa FC":"Aston Villa",
+  const ESPN_TEAM_MAP = {
+    "Arsenal":"Arsenal","Aston Villa":"Aston Villa","AFC Bournemouth":"Bournemouth",
+    "Bournemouth":"Bournemouth","Brentford":"Brentford","Brighton & Hove Albion":"Brighton",
+    "Brighton":"Brighton","Burnley":"Burnley","Chelsea":"Chelsea",
+    "Crystal Palace":"Crystal Palace","Everton":"Everton","Fulham":"Fulham",
+    "Leeds United":"Leeds","Leeds":"Leeds","Liverpool":"Liverpool",
+    "Manchester City":"Man City","Man City":"Man City","Manchester United":"Man Utd",
+    "Man United":"Man Utd","Newcastle United":"Newcastle","Newcastle":"Newcastle",
+    "Nottingham Forest":"Nottm Forest","Nottm Forest":"Nottm Forest",
+    "Sunderland":"Sunderland","Tottenham Hotspur":"Spurs","Spurs":"Spurs",
+    "West Ham United":"West Ham","West Ham":"West Ham",
+    "Wolverhampton Wanderers":"Wolves","Wolves":"Wolves",
   };
 
+  const norm = t => ESPN_TEAM_MAP[t] || t;
+
   try {
-    // Fetch all matches for 2025-26 PL season
-    const res = await fetch(
-      "https://api.football-data.org/v4/competitions/PL/matches?season=2025",
-      { headers: { "X-Auth-Token": apiKey } }
-    );
-    if (!res.ok) {
-      console.log("football-data.org error:", res.status);
-      return { fixtures, updated: 0, dateChanges: 0, error: `API error ${res.status}` };
-    }
-    const data = await res.json();
-    if (!data.matches) return { fixtures, updated: 0, dateChanges: 0 };
+    const now = new Date();
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 60);
+
+    // Fetch last 60 days in two date range requests (ESPN limit ~30 days per request)
+    const fmt = d => d.toISOString().split("T")[0].replace(/-/g,"");
+    const mid = new Date(now);
+    mid.setDate(mid.getDate() - 30);
+
+    const [r1, r2] = await Promise.all([
+      fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=${fmt(cutoff)}-${fmt(mid)}&limit=100`),
+      fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=${fmt(mid)}-${fmt(now)}&limit=100`)
+    ]);
+
+    const events = [];
+    if (r1.ok) { const d = await r1.json(); (d.events||[]).forEach(e=>events.push(e)); }
+    if (r2.ok) { const d = await r2.json(); (d.events||[]).forEach(e=>events.push(e)); }
+
+    if (!events.length) return { fixtures, updated: 0, dateChanges: 0 };
 
     const newFx = JSON.parse(JSON.stringify(fixtures));
     let updated = 0, dateChanges = 0;
 
-    data.matches.forEach(m => {
-      const home = FD_MAP[m.homeTeam?.name] || m.homeTeam?.shortName;
-      const away = FD_MAP[m.awayTeam?.name] || m.awayTeam?.shortName;
+    events.forEach(ev => {
+      const comps = ev.competitions?.[0];
+      if (!comps) return;
+      const competitors = comps.competitors || [];
+      const homeComp = competitors.find(c => c.homeAway === "home");
+      const awayComp = competitors.find(c => c.homeAway === "away");
+      if (!homeComp || !awayComp) return;
+
+      const home = norm(homeComp.team?.displayName || homeComp.team?.name || "");
+      const away = norm(awayComp.team?.displayName || awayComp.team?.name || "");
       if (!home || !away) return;
 
-      // Convert UTC to UK time
-      const d = new Date(m.utcDate);
-      const ukOff = (d.getMonth()>=2 && d.getMonth()<=9) ? 60 : 0;
-      d.setMinutes(d.getMinutes() + ukOff);
-      const ukDate = d.toISOString().split("T")[0];
-      const ukTime = d.toISOString().split("T")[1].substring(0,5);
+      const status = ev.status?.type?.completed;
+      const inProgress = ev.status?.type?.state === "in";
+
+      // Parse date
+      const evDate = ev.date ? ev.date.split("T")[0] : null;
+      const evTime = ev.date ? new Date(ev.date).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Europe/London"}) : null;
 
       Object.values(newFx).forEach(mwList => {
         mwList.forEach(fx => {
           if (fx.home !== home || fx.away !== away) return;
-          // Update result if finished
-          if (m.status === "FINISHED" && m.score?.fullTime) {
-            const h = m.score.fullTime.home, a = m.score.fullTime.away;
-            if (h !== null && a !== null) {
-              if (!fx.result || fx.result.homeGoals !== h || fx.result.awayGoals !== a) {
-                fx.result = { homeGoals: h, awayGoals: a };
-                updated++;
+
+          // Update result if fully finished (not in progress)
+          if (status && !inProgress) {
+            const h = parseInt(homeComp.score);
+            const a = parseInt(awayComp.score);
+            if (!isNaN(h) && !isNaN(a)) {
+              const mDT = new Date(`${fx.currentDate}T${fx.currentTime}:00`);
+              if (mDT < now && mDT >= cutoff) {
+                if (!fx.result || fx.result.homeGoals !== h || fx.result.awayGoals !== a) {
+                  fx.result = { homeGoals: h, awayGoals: a };
+                  updated++;
+                }
               }
             }
           }
-          // Update date if rescheduled and not yet played
-          if (!fx.result && (m.status === "SCHEDULED" || m.status === "TIMED")) {
-            if (fx.currentDate !== ukDate || fx.currentTime !== ukTime) {
-              fx.currentDate = ukDate;
-              fx.currentTime = ukTime;
-              dateChanges++;
-            }
+
+          // Update fixture date/time if rescheduled and not yet played
+          if (!fx.result && !inProgress && evDate && evDate !== fx.currentDate) {
+            fx.currentDate = evDate;
+            if (evTime) fx.currentTime = evTime;
+            dateChanges++;
           }
         });
       });
@@ -265,9 +296,59 @@ async function liveRefresh(fixtures) {
 
     return { fixtures: newFx, updated, dateChanges };
   } catch(e) {
-    console.log("liveRefresh error:", e.message);
-    return { fixtures, updated: 0, dateChanges: 0, error: e.message };
+    console.log("ESPN refresh error:", e.message);
+    // Fall back to football-data.org if ESPN fails
+    return liveRefreshFallback(fixtures);
   }
+}
+
+// Fallback: football-data.org (requires API key)
+async function liveRefreshFallback(fixtures) {
+  const apiKey = (() => { try { return localStorage.getItem("hpl_fdorg_key") || ""; } catch { return ""; } })();
+  if (!apiKey) return { fixtures, updated: 0, dateChanges: 0 };
+  try {
+    const res = await fetch("https://api.football-data.org/v4/competitions/PL/matches?season=2025",
+      { headers: { "X-Auth-Token": apiKey } });
+    if (!res.ok) return { fixtures, updated: 0, dateChanges: 0 };
+    const data = await res.json();
+    if (!data.matches) return { fixtures, updated: 0, dateChanges: 0 };
+    const newFx = JSON.parse(JSON.stringify(fixtures));
+    let updated = 0, dateChanges = 0;
+    const now = new Date();
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-60);
+    const FD_MAP = {
+      "Arsenal FC":"Arsenal","AFC Bournemouth":"Bournemouth","Brentford FC":"Brentford",
+      "Brighton & Hove Albion FC":"Brighton","Burnley FC":"Burnley","Chelsea FC":"Chelsea",
+      "Crystal Palace FC":"Crystal Palace","Everton FC":"Everton","Fulham FC":"Fulham",
+      "Leeds United FC":"Leeds","Liverpool FC":"Liverpool","Manchester City FC":"Man City",
+      "Manchester United FC":"Man Utd","Newcastle United FC":"Newcastle",
+      "Nottingham Forest FC":"Nottm Forest","Sunderland AFC":"Sunderland",
+      "Tottenham Hotspur FC":"Spurs","West Ham United FC":"West Ham",
+      "Wolverhampton Wanderers FC":"Wolves","Aston Villa FC":"Aston Villa",
+    };
+    data.matches.forEach(m => {
+      const home = FD_MAP[m.homeTeam?.name] || m.homeTeam?.shortName;
+      const away = FD_MAP[m.awayTeam?.name] || m.awayTeam?.shortName;
+      if (!home || !away) return;
+      Object.values(newFx).forEach(mwList => {
+        mwList.forEach(fx => {
+          if (fx.home !== home || fx.away !== away) return;
+          if (m.status === "FINISHED" && m.score?.fullTime) {
+            const h = m.score.fullTime.home, a = m.score.fullTime.away;
+            if (h !== null && a !== null) {
+              const mDT = new Date(`${fx.currentDate}T${fx.currentTime}:00`);
+              if (mDT < now && mDT >= cutoff) {
+                if (!fx.result || fx.result.homeGoals !== h || fx.result.awayGoals !== a) {
+                  fx.result = { homeGoals: h, awayGoals: a }; updated++;
+                }
+              }
+            }
+          }
+        });
+      });
+    });
+    return { fixtures: newFx, updated, dateChanges };
+  } catch(e) { return { fixtures, updated: 0, dateChanges: 0 }; }
 }
 const SEASON_FIXTURES = {
 1:[
@@ -757,14 +838,14 @@ const REAL_RESULTS = {
 24:[ [0,1],[1,2],[2,0],[0,4],[4,1],[3,2],[2,0],[1,0],[2,2],[0,1] ],
 25:[ [1,1],[3,0],[2,1],[0,0],[2,1],[2,0],[1,2],[1,1],[2,0],[1,3] ],
 26:[ [1,0],[1,1],[1,2],[3,1],[1,0],[3,0],[2,2],[0,3],[1,2],[1,0] ],
-27:[ [1,1],[1,0],[2,1],[2,1],[1,0],[2,1],[1,2],[1,1],[1,4],[2,2] ],
-28:[ [1,0],[2,1],[2,1],[2,1],[1,1],[0,2],[1,0],[1,1],[1,0],[2,0] ],
-29:[ [2,0],[1,4],[0,1],[1,1],[2,1],[0,0],[2,2],[1,1],[1,2],[0,3] ],
-30:[ [1,1],[1,1],[2,1],[1,0],[0,0],[0,1],[2,0],[3,1],[2,0],[2,1] ], // WHam-ManCity, Burnley-Bmouth, CP-Leeds, Forest-Fulham, Sunderland-Brighton, Chelsea-Newcastle 0-1, Arsenal-Everton, ManUtd-AV, Liverpool-Spurs, Brentford-Wolves
-31:[ [2,2],[1,0],[1,1],[2,1],[1,0],[1,0],[2,0],[2,0],[1,1],[2,0] ], // Wolves-Arsenal 2-2(18Feb), Bmouth-MU 1-0, Brighton-Liverpool 1-1, Fulham-Burnley 2-1, Everton-Chelsea 1-0, Leeds-Brentford 1-0, Newcastle-Sunderland 2-0, AV-WHam 3-1, Spurs-Forest 1-1, ManCity-CP 2-0
+27:[ [1,1],[0,2],[1,1],[1,0],[0,1],[2,1],[0,1],[1,3],[1,4],[0,0] ],
+28:[ [1,1],[2,1],[2,1],[3,4],[1,1],[0,1],[5,2],[2,1],[2,3],[2,0] ],
+29:[ [2,0],[1,4],[0,1],[1,1],[2,1],[0,0],[2,2],[1,1],[1,2],[2,1] ],
+30:[ [1,1],[1,1],[2,1],[1,0],[0,0],[0,1],[2,0],[3,1],[1,1],[2,1] ], // WHam-ManCity, Burnley-Bmouth, CP-Leeds, Forest-Fulham, Sunderland-Brighton, Chelsea-Newcastle 0-1, Arsenal-Everton, ManUtd-AV, Liverpool-Spurs, Brentford-Wolves
+31:[ [2,2],[2,2],[2,1],[2,1],[1,0],[1,0],[2,0],[2,0],[0,3],null ], // Wolves-Arsenal 2-2(18Feb), Bmouth-MU 1-0, Brighton-Liverpool 1-1, Fulham-Burnley 2-1, Everton-Chelsea 1-0, Leeds-Brentford 1-0, Newcastle-Sunderland 2-0, AV-WHam 3-1, Spurs-Forest 1-1, ManCity-CP 2-0
 32:[ [4,0],[1,2],[2,2],[0,2],[2,0],[2,1],[1,1],[1,0],[0,3],[1,2] ],
 33:[ [0,0],[3,0],[1,2],[2,2],[0,1],[4,1],[4,3],[1,2],[2,1],[0,0] ],
-34:[ [3,0],[0,1],[2,2],[0,5],[1,0],[0,1],[2,1],[3,1],[1,0],null ],
+34:[ [3,0],[0,1],[2,2],[0,5],[1,0],[0,1],[2,1],[3,1],[1,0],[2,1] ],
 };
 
 
@@ -801,11 +882,12 @@ const DATE_OVERRIDES = {
   // MW31: Wolves v Arsenal moved from 21 Mar to 18 Feb (Carabao Cup final clash)
   "31-0": { currentDate:"2026-02-18", currentTime:"20:00" },
   // MW31: Man City v Crystal Palace postponed, moved to 2 Apr
-  "31-9": { currentDate:"2026-04-02", currentTime:"20:00" },
+  "31-9": { currentDate:"2026-05-13", currentTime:"20:00" },
   // Note: MW34 dates are already correct in SEASON_FIXTURES - no overrides needed
 };
 
 const buildFixtures = () => {
+  const now = new Date();
   const out = {};
   Object.entries(SEASON_FIXTURES).forEach(([mwStr, list]) => {
     const mw = parseInt(mwStr);
@@ -814,11 +896,16 @@ const buildFixtures = () => {
       const res = results[i];
       const id = `${mw}-${i}`;
       const override = DATE_OVERRIDES[id] || {};
+      const currentDate = override.currentDate || f.date;
+      const currentTime = override.currentTime || f.time;
+      // Only show hardcoded result if match date is in the past
+      // This prevents bogus results appearing for future fixtures
+      const matchDateTime = new Date(`${currentDate}T${currentTime}:00`);
+      const matchPlayed = matchDateTime < now;
       return { id, mw, home:f.home, away:f.away,
         date:f.date, time:f.time,
-        currentDate: override.currentDate || f.date,
-        currentTime: override.currentTime || f.time,
-        result: res ? { homeGoals:res[0], awayGoals:res[1] } : null };
+        currentDate, currentTime,
+        result: (res && matchPlayed) ? { homeGoals:res[0], awayGoals:res[1] } : null };
     });
   });
   return out;
@@ -863,7 +950,7 @@ function getDisplayMW(fx, mwRanges) {
 }
 
 const AUTO_REVEALS = {};
-for(let i=1;i<=33;i++) AUTO_REVEALS[i]=true;
+for(let i=1;i<=34;i++) AUTO_REVEALS[i]=true;
 const FIXTURES_UPDATED = "26 Apr 2026"; // Update this date whenever fixture dates are changed
 const DEFAULT_PLAYERS = ["Trev","Clive","Andrew","Pete","Steve","Cos","Terry","Alasdair"];
 
@@ -912,7 +999,7 @@ function App(){
     });
     // Sort each MW by currentDate then currentTime
     Object.values(out).forEach(list=>list.sort((a,b)=>
-      (a.currentDate+a.currentTime).localeCompare(b.currentDate+b.currentTime)
+      a.home.localeCompare(b.home)
     ));
     // Deduplicate: remove any fixture that appears more than once across all MWs
     const seenIds = new Set();
@@ -929,11 +1016,10 @@ function App(){
   const[reveals,setReveals]=useState(()=>{
     try{
       const d=loadAll();
-      const stored=d.rv||{};
-      // AUTO_REVEALS always wins for MWs 1-32, stored values only apply for MW 33+
-      const merged={...stored};
-      for(let i=1;i<=32;i++) merged[i]=true;
-      return merged;
+      // Use stored reveals exactly as-is — admin controls reveals
+      // Only use AUTO_REVEALS if nothing is stored at all (first run)
+      if(d.rv&&Object.keys(d.rv).length>0) return d.rv;
+      return AUTO_REVEALS;
     }catch{return AUTO_REVEALS;}
   });
   const[deadlines,setDeadlines]=useState(()=>{try{const d=loadAll();return d.dl||{};}catch{return {};}});
@@ -969,14 +1055,22 @@ function App(){
   // Load all shared state from Supabase on mount
   useEffect(()=>{
     setSupaLoading(true);
-    loadFromSupabase().then(({reveals:rv, deadlines:dl, pins:p, predictions:pr})=>{
-      // Merge auto-reveals
-      const mergedRv = {...rv};
-      for(let i=1;i<=33;i++) mergedRv[i]=true;
+    loadFromSupabase().then(({reveals:rv,deadlines:dl,pins:p,predictions:pr,supaResults:sr})=>{
+      const mergedRv=rv&&Object.keys(rv).length>0?{...rv}:{...AUTO_REVEALS};
       setReveals(mergedRv);
       setDeadlines(dl);
       setPins(p);
       setPredictions(pr);
+      if(sr&&Object.keys(sr).length>0){
+        const todaySR=new Date().toISOString().split("T")[0];
+        setFixtures(f=>{
+          const nf=JSON.parse(JSON.stringify(f));
+          Object.values(nf).forEach(mwList=>mwList.forEach(fx=>{
+            if(sr[fx.id]&&fx.currentDate<=todaySR) fx.result=sr[fx.id];
+          }));
+          return nf;
+        });
+      }
       setSupaError(null);
     }).catch(e=>{
       console.log("Supabase load failed:", e.message);
@@ -984,8 +1078,8 @@ function App(){
       // Fall back to localStorage
       try{
         const d=loadAll();
-        const rv={...(d.rv||{})};
-        for(let i=1;i<=33;i++) rv[i]=true;
+
+      const rv=d.rv&&Object.keys(d.rv).length>0?d.rv:{...AUTO_REVEALS};
         setReveals(rv);
       }catch{}
     }).finally(()=>setSupaLoading(false));
@@ -1005,27 +1099,30 @@ function App(){
   };
 
   const isPast=(w)=>{const d=deadlines[w];return d?new Date()>new Date(d):false;};
-  // Count jokers from predictions (source of truth, synced via Supabase)
-  const jokersUsedFromPreds=(p,h)=>{
+  // Joker helpers - check saved predictions for joker usage
+  const jokersUsed=(p,h)=>{
     const pPreds=predictions[p]||{};
-    const allFxFlat=Object.values(displayFixtures||fixtures).flat();
-    return allFxFlat.filter(fx=>{
-      const pred=pPreds[fx.id];
-      return pred?.joker && half(fx.mw||parseInt(fx.id?.split('-')[0]))===h;
-    }).length;
+    let count=0;
+    // Count from saved predictions
+    Object.entries(pPreds).forEach(([fxId,pred])=>{
+      if(!pred?.joker)return;
+      const mwNum=parseInt(fxId.split('-')[0]);
+      if(half(mwNum)===h)count++;
+    });
+    return count;
   };
-  const hasJokerFromPreds=(p,w)=>{
+  const hasJoker=(p,w)=>{
+    // Check if joker already used in any fixture of this MW (saved predictions)
     const pPreds=predictions[p]||{};
     const fxsInMW=(displayFixtures||fixtures)[w]||[];
     return fxsInMW.some(fx=>pPreds[fx.id]?.joker);
   };
-  // Keep old jokers state as fallback but prefer predictions
-  const jokersUsed=(p,h)=>Math.max(
-    Object.entries(jokers[p]||{}).filter(([w,v])=>v&&half(parseInt(w))===h).length,
-    jokersUsedFromPreds(p,h)
-  );
-  const hasJoker=(p,w)=>!!(jokers[p]?.[w])||hasJokerFromPreds(p,w);
-  const canJoker=(p,w)=>!hasJoker(p,w)&&jokersUsed(p,half(w))<5;
+  const canJoker=(p,w)=>{
+    if(!p)return false;
+    if(hasJoker(p,w))return false; // already has joker this MW
+    if(jokersUsed(p,half(w))>=5)return false; // used 5 this half-season
+    return true;
+  };
 
   const submit=async()=>{
     if(!me)return;
@@ -1036,7 +1133,21 @@ function App(){
     if(Object.values(draft).some(p=>p.joker)&&canJoker(me,mw))jk2[me][mw]=true;
     setPredictions(pr2);setJokers(jk2);
     saveAll({pr:pr2,jk:jk2});
-    toast_("Saved! 🎯");setDraft({});
+    // Save predictions to Supabase so all devices see them
+    const mwDraft = draft;
+    saveAllPredictions(me, Object.fromEntries(
+      Object.entries(mwDraft).map(([fxId,p])=>[fxId,{
+        homeGoals:p.homeGoals!==undefined?p.homeGoals:null,
+        awayGoals:p.awayGoals!==undefined?p.awayGoals:null,
+        joker:p.joker||false
+      }])
+    )).then(()=>{
+      toast_("Saved! 🎯");
+    }).catch(e=>{
+      toast_("Saved locally — sync to server failed","error");
+      console.log("Supabase prediction save failed:",e.message);
+    });
+    setDraft({});
   };
 
 
@@ -1048,7 +1159,7 @@ function App(){
         <div style={S.hdrIn}>
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             <div style={S.badge}>⚽</div>
-            <div><div style={S.title}>HPL Predictions</div><div style={S.sub}>2025/26 · <span style={{color:"#7C3AED"}}>Updated 28 Apr 2026 v5</span></div></div>
+            <div><div style={S.title}>HPL Predictions</div><div style={S.sub}>2025/26 · <span style={{color:"#7C3AED"}}>Updated 29 Apr 2026 v20</span></div></div>
           </div>
           {me&&<div style={S.chip}><span style={S.dot}/>{me}</div>}
         </div>
@@ -1079,7 +1190,7 @@ function App(){
       {refreshStatus==="loading"&&(
         <div style={{background:"#1E293B",padding:"8px 16px",fontSize:12,color:"#60A5FA",display:"flex",alignItems:"center",gap:8}}>
           <span style={{display:"inline-block",animation:"spin 1s linear infinite"}}>⟳</span>
-          Checking for latest fixtures and results...
+          Checking results from last 60 days...
         </div>
       )}
       {refreshStatus&&refreshStatus!=="loading"&&(refreshStatus.updated>0||refreshStatus.dateChanges>0)&&(
@@ -1101,8 +1212,9 @@ function Predict({fixtures,displayFixtures,predictions,reveals,deadlines,players
   const fxList=(displayFixtures||fixtures)[mw]||[];
   const past=isPast(mw),revealed=reveals[mw];
   const ep=me?(predictions[me]||{}):{};
-  const jUsed=me?hasJoker(me,mw):false;
-  const jOk=me?canJoker(me,mw):false;
+  const jUsed=me?(hasJoker(me,mw)||Object.values(draft).some(p=>p.joker)):false;
+  // Can play joker if: not already set this week (in saved OR draft), and under 5 for half-season
+  const jOk=me&&!jUsed&&jokersUsed(me,half(mw))<5;
   const merged=(id)=>draft[id]||ep[id]||{};
   const set_=(id,f,v)=>setDraft(d=>({...d,[id]:{...(d[id]||ep[id]||{}),[f]:v}}));
   const toggleJ=(id)=>{
@@ -1362,9 +1474,15 @@ function Results({fixtures,displayFixtures,predictions,reveals,players,jokers,me
     }).sort((a,b)=>a.displayMW-b.displayMW);
   },[allFx,homeQ,awayQ]);
 
-  // Only revealed MWs show full results. Unrevealed MWs show only your own prediction.
+  // Show MWs that have results OR player has predictions OR are revealed
+  // Results always visible; other players' predictions only shown when revealed
   const allMWs = Array.from({length:38},(_,i)=>i+1)
-    .filter(w => reveals[w] || (me && Object.keys(predictions[me]||{}).some(id=>id.startsWith(`${w}-`))))
+    .filter(w => {
+      const mwFxList = (displayFixtures||fixtures)[w] || [];
+      const hasResult = mwFxList.some(fx => fx.result);
+      const myPreds = me && Object.keys(predictions[me]||{}).some(id=>id.startsWith(`${w}-`));
+      return hasResult || myPreds || reveals[w];
+    })
     .sort((a,b)=>b-a);
 
   return(
@@ -1653,11 +1771,22 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
 
   const fxs=(displayFixtures||fixtures)[ew]||[];
   const upRes=(id,side,v)=>{
-    setFixtures(f=>{const nf={...f};nf[ew]=nf[ew].map(x=>{
-      if(x.id!==id)return x;
-      const val=v===""?null:parseInt(v);
-      return{...x,result:{homeGoals:side==="h"?val:(x.result?.homeGoals??null),awayGoals:side==="a"?val:(x.result?.awayGoals??null)}};
-    });return nf;});
+    setFixtures(f=>{
+      const nf={...f};
+      nf[ew]=nf[ew].map(x=>{
+        if(x.id!==id)return x;
+        const val=v===""?null:parseInt(v);
+        const newResult={homeGoals:side==="h"?val:(x.result?.homeGoals??null),awayGoals:side==="a"?val:(x.result?.awayGoals??null)};
+        // Save to Supabase only if match date has passed (prevent bogus future results)
+        const todayUR=new Date().toISOString().split("T")[0];
+        if(newResult.homeGoals!==null&&newResult.awayGoals!==null&&(x.currentDate||x.date)<=todayUR){
+          supa.upsert("results",{id,home_goals:newResult.homeGoals,away_goals:newResult.awayGoals,updated_at:new Date().toISOString()})
+            .catch(e=>console.log("Result save failed:",e.message));
+        }
+        return{...x,result:newResult};
+      });
+      return nf;
+    });
   };
   const upDate=(id,d,t)=>{
     setFixtures(f=>{const nf={...f};nf[ew]=nf[ew].map(x=>{
@@ -1733,13 +1862,23 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
           <div>
             <div style={S.ct}>🔄 Live Data</div>
-            <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Predictions sync via Supabase. Results auto-refresh via football-data.org.</div>
+            <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Predictions sync via Supabase. Results auto-refresh via ESPN (no key needed). football-data.org used as backup.</div>
           </div>
           <button onClick={()=>{
             setSupaLoading(true);
-            loadFromSupabase().then(({reveals:rv,deadlines:dl,pins:p,predictions:pr})=>{
-              const mergedRv={...rv};for(let i=1;i<=33;i++)mergedRv[i]=true;
+            loadFromSupabase().then(({reveals:rv,deadlines:dl,pins:p,predictions:pr,supaResults:sr})=>{
+              const mergedRv=rv&&Object.keys(rv).length>0?{...rv}:{...AUTO_REVEALS};
               setReveals(mergedRv);setDeadlines(dl);setPins(p);setPredictions(pr);
+              if(sr&&Object.keys(sr).length>0){
+                const todayR=new Date().toISOString().split("T")[0];
+                setFixtures(f=>{
+                  const nf=JSON.parse(JSON.stringify(f));
+                  Object.values(nf).forEach(mwList=>mwList.forEach(fx=>{
+                    if(sr[fx.id]&&fx.currentDate<=todayR) fx.result=sr[fx.id];
+                  }));
+                  return nf;
+                });
+              }
               toast_("✓ Refreshed from server");
             }).catch(e=>toast_("Refresh failed: "+e.message,"error"))
             .finally(()=>setSupaLoading(false));
@@ -1755,7 +1894,11 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
             defaultValue={localStorage.getItem("hpl_fdorg_key")||""}
             placeholder="Paste your football-data.org API token"
             style={{...S.inp,marginBottom:0,flex:1,fontSize:12}}
-            onChange={e=>{try{localStorage.setItem("hpl_fdorg_key",e.target.value.trim());}catch{}}}
+            onChange={e=>{
+            const v=e.target.value.trim();
+            try{localStorage.setItem("hpl_fdorg_key",v);}catch{}
+            if(v.length>10) supa.setState("fd_token",v).catch(()=>{});
+          }}
           />
         </div>
         <div style={{fontSize:11,color:"#475569",marginTop:6}}>
@@ -1967,7 +2110,7 @@ Don't forget to submit your predictions! 🎯`;
 function ShareInstructions({toast_}){
   const[copied,setCopied]=useState(false);
   const[expanded,setExpanded]=useState(false);
-  const url = "https://cchristou71-spec.github.io/hpl-predictions";
+  const url = "https://hpl-predictions.tiiny.site";
 
   const copyUrl=()=>{
     navigator.clipboard.writeText(url)
