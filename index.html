@@ -1526,7 +1526,7 @@ function App(){
 
 
   // Demo mode: inject fake MW1+MW2 data so Results tab can be previewed before season starts
-  const DEMO_PLAYERS = ["Trev","Clive","Andrew","Pete","Steve","Cos","Terry","Alasdair"];
+  const DEMO_PLAYERS = ["Trev","Clive","Andrew","Pete","Steve","Cos","Terry","Alasdair"]; // fixed display order
   const DEMO_FIXTURES = {
     1: [
       {id:"d1-0",mw:1,home:"Liverpool",away:"Bournemouth",date:"2026-08-19",time:"20:00",currentDate:"2026-08-19",currentTime:"20:00",result:{homeGoals:4,awayGoals:2}},
@@ -2493,6 +2493,20 @@ function RecentResults({fixtures,displayFixtures}){
 
 function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,players,jokers,me,admin,expMW,setExpMW,search,setSearch,searchMode,setSearchMode,homeQ,setHomeQ,awayQ,setAwayQ}){
   const [summaryOpen,setSummaryOpen]=useState(false);
+  // Fixed player display order
+  const PLAYER_ORDER = ["Trev","Clive","Andrew","Pete","Steve","Cos","Terry","Alasdair"];
+  const orderedPlayers = [...players].sort((a,b)=>{
+    const ai=PLAYER_ORDER.indexOf(a), bi=PLAYER_ORDER.indexOf(b);
+    if(ai===-1&&bi===-1)return a.localeCompare(b);
+    if(ai===-1)return 1; if(bi===-1)return -1;
+    return ai-bi;
+  });
+  // Sort fixtures by date then home team
+  const sortFxs = (fxs) => [...fxs].sort((a,b)=>{
+    const da=new Date(a.currentDate||a.date), db=new Date(b.currentDate||b.date);
+    if(da-db!==0)return da-db;
+    return (a.home||'').localeCompare(b.home||'');
+  });
   // homeQ/awayQ/searchMode all lifted to App level — persist across tab switches
 
   // Flatten ALL fixtures for search - all 38 MWs including future ones
@@ -2861,7 +2875,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,pla
                   {/* Prediction summary — only show when revealed */}
                   {canSeeRevealed&&(()=>{
                     const groups={};
-                    players.forEach(p=>{
+                    orderedPlayers.forEach(p=>{
                       const pred=predictions[p]?.[fx.id];
                       if(!pred||pred.homeGoals===undefined||pred.awayGoals===undefined) return;
                       const score=`${pred.homeGoals}-${pred.awayGoals}`;
@@ -2904,7 +2918,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,pla
                     );
                   })()}
                   <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                    {players.map(p=>{
+                    {orderedPlayers.map(p=>{
                       const pred=predictions[p]?.[fx.id];
                       const jk=pred?.joker||false;
                       const pts=pred&&fx.result&&canSeeRevealed?calcPts(pred,fx.result):null;
@@ -2950,7 +2964,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,pla
         // Calc totals - only for revealed weeks
         const tots={};
         if(canSeeRevealed){
-          players.forEach(p=>{
+          orderedPlayers.forEach(p=>{
             tots[p]=fxs.reduce((acc,fx)=>{
               if(!fx.result)return acc;
               const pred=predictions[p]?.[fx.id];if(!pred)return acc;
@@ -2986,7 +3000,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,pla
                 {/* Revealed: show all players' points summary */}
                 {canSeeRevealed&&(
                   <div style={{display:"flex",flexWrap:"wrap",gap:8,margin:"12px 0"}}>
-                    {players.map(p=>(
+                    {orderedPlayers.map(p=>(
                       <div key={p} style={{background:"#0F172A",borderRadius:8,padding:"8px 10px",textAlign:"center",minWidth:60,border:`1px solid ${playerColour(p)}33`}}>
                         <div style={{fontSize:10,color:playerColour(p),maxWidth:70,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:600}}>{p}</div>
                         <div style={{fontSize:22,fontWeight:800,color:playerColour(p)}}>{tots[p]}</div>
@@ -2994,7 +3008,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,pla
                     ))}
                   </div>
                 )}
-                {fxs.map(fx=>(
+                {sortFxs(fxs).map(fx=>(
                   <div key={fx.id} style={{...S.fx,marginBottom:8}}>
                     <div style={{marginBottom:6}}>
                       <span style={{color:fx.movedMW?"#F59E0B":"#64748B",fontSize:11}}>
@@ -3025,7 +3039,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,pla
                       {/* Prediction summary — only show when revealed */}
                       {canSeeRevealed&&(()=>{
                         const groups={};
-                        players.forEach(p=>{
+                        orderedPlayers.forEach(p=>{
                           const pred=predictions[p]?.[fx.id];
                           if(!pred||pred.homeGoals===undefined||pred.awayGoals===undefined) return;
                           const score=`${pred.homeGoals}-${pred.awayGoals}`;
@@ -3070,7 +3084,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,pla
                       })()}
                       {/* Player prediction cards */}
                       <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                        {players.map(p=>{
+                        {orderedPlayers.map(p=>{
                           const pred=predictions[p]?.[fx.id];
                           const jk=pred?.joker||false;
                           const pts=pred&&fx.result&&canSeeRevealed?calcPts(pred,fx.result):null;
