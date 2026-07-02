@@ -1088,6 +1088,7 @@ function App(){
   const[players,setPlayers]=useState(DEFAULT_PLAYERS);  // hardcoded default, admin can edit
   const[seasonLabel,setSeasonLabel]=useState("2026/27");
   const[me,setMe]=useState(null);
+  const[leagueRevealed,setLeagueRevealed]=useState(false);
   const[seasonPreds,setSeasonPreds]=useState(()=>{
     try{ const d=loadAll(); return d.season_preds||{}; }catch{ return {}; }
   });
@@ -1323,6 +1324,7 @@ function App(){
         if(Object.keys(gp).length>0) setSeasonGP(gp);
       }
       if(seasonPreds2&&Object.keys(seasonPreds2).length>0) setSeasonPreds(seasonPreds2);
+      supa.getState("league_revealed").then(lr=>{ if(lr) setLeagueRevealed(true); }).catch(()=>{});
       if(seasonActual2&&seasonActual2.length>0){
         setSeasonActual(seasonActual2);
         setStandingsSource('supabase');
@@ -1640,12 +1642,12 @@ function App(){
         {tab==="preds"&&<Results {...props} me={me} admin={admin} expMW={expMW} setExpMW={setExpMW} search={search} setSearch={setSearch} searchMode={searchMode} setSearchMode={setSearchMode} homeQ={homeQ} setHomeQ={setHomeQ} awayQ={awayQ} setAwayQ={setAwayQ}/>}
         {tab==="season"&&<SeasonTab
           players={effectivePlayers} me={me}
-          seasonPreds={effectiveSeasonPreds} setSeasonPreds={setSeasonPreds}
+          leagueRevealed={leagueRevealed} seasonPreds={effectiveSeasonPreds} setSeasonPreds={setSeasonPreds}
           seasonActual={effectiveSeasonActual} seasonPts={seasonPts} seasonGP={seasonGP}
           saveAll={saveAll} toast_={toast_} setTab={setTab} seasonLabel={seasonLabel}
         />}
         {tab==="league"&&<League {...props} me={me}/>}
-        {tab==="admin"&&<Admin {...props} fixtures={fixtures} displayFixtures={displayFixtures} demoMode={demoMode} setDemoMode={setDemoMode} setFixtures={setFixtures} predictions={predictions} setPredictions={setPredictions} jokers={jokers} setJokers={setJokers} pins={pins} setPins={setPins} reveals={reveals} setReveals={setReveals} deadlines={deadlines} setDeadlines={setDeadlines} manuallyUnlocked={manuallyUnlocked} setManuallyUnlocked={setManuallyUnlocked} players={players} setPlayers={setPlayers} admin={admin} setAdmin={setAdmin} toast_={toast_} saveAll={saveAll} syncStatus={syncStatus} setSupaLoading={setSupaLoading} seasonActual={seasonActual} setSeasonActual={setSeasonActual} seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds} seasonPts={seasonPts} setSeasonPts={setSeasonPts} seasonGP={seasonGP} standingsSource={standingsSource} mwOverrides={mwOverrides} setMwOverrides={setMwOverrides} entryFees={entryFees} setEntryFees={setEntryFees} seasonLabel={seasonLabel} setSeasonLabel={setSeasonLabel} emails={emails} setEmails={setEmails} onForceRefresh={()=>{setRefreshStatus("loading");liveRefresh(fixtures, mwOverrides).then(({fixtures:nFx,updated,dateChanges,fixturesBuilt})=>{if(fixturesBuilt||updated>0||dateChanges>0)setFixtures(nFx);setRefreshStatus({updated,dateChanges});setTimeout(()=>setRefreshStatus(null),4000);toast_(fixturesBuilt?`✅ Fixtures loaded from ESPN! ${Object.keys(nFx).length} match weeks`:`ESPN refresh: ${updated} results, ${dateChanges} date changes`);}).catch(e=>{setRefreshStatus(null);toast_("ESPN refresh failed: "+e.message,"error");});}}/>}
+        {tab==="admin"&&<Admin {...props} fixtures={fixtures} displayFixtures={displayFixtures} demoMode={demoMode} setDemoMode={setDemoMode} leagueRevealed={leagueRevealed} setLeagueRevealed={setLeagueRevealed} setFixtures={setFixtures} predictions={predictions} setPredictions={setPredictions} jokers={jokers} setJokers={setJokers} pins={pins} setPins={setPins} reveals={reveals} setReveals={setReveals} deadlines={deadlines} setDeadlines={setDeadlines} manuallyUnlocked={manuallyUnlocked} setManuallyUnlocked={setManuallyUnlocked} players={players} setPlayers={setPlayers} admin={admin} setAdmin={setAdmin} toast_={toast_} saveAll={saveAll} syncStatus={syncStatus} setSupaLoading={setSupaLoading} seasonActual={seasonActual} setSeasonActual={setSeasonActual} seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds} seasonPts={seasonPts} setSeasonPts={setSeasonPts} seasonGP={seasonGP} standingsSource={standingsSource} mwOverrides={mwOverrides} setMwOverrides={setMwOverrides} entryFees={entryFees} setEntryFees={setEntryFees} seasonLabel={seasonLabel} setSeasonLabel={setSeasonLabel} emails={emails} setEmails={setEmails} onForceRefresh={()=>{setRefreshStatus("loading");liveRefresh(fixtures, mwOverrides).then(({fixtures:nFx,updated,dateChanges,fixturesBuilt})=>{if(fixturesBuilt||updated>0||dateChanges>0)setFixtures(nFx);setRefreshStatus({updated,dateChanges});setTimeout(()=>setRefreshStatus(null),4000);toast_(fixturesBuilt?`✅ Fixtures loaded from ESPN! ${Object.keys(nFx).length} match weeks`:`ESPN refresh: ${updated} results, ${dateChanges} date changes`);}).catch(e=>{setRefreshStatus(null);toast_("ESPN refresh failed: "+e.message,"error");});}}/>}
       </main>
     </div>
   );
@@ -3392,7 +3394,7 @@ function AdminGroup({title, defaultOpen=false, accent="#334155", children}) {
   );
 }
 
-function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,jokers,setJokers,pins,setPins,reveals,setReveals,deadlines,setDeadlines,manuallyUnlocked,setManuallyUnlocked,players,setPlayers,admin,setAdmin,toast_,saveAll,syncStatus,setSupaLoading,seasonActual,setSeasonActual,seasonPreds,setSeasonPreds,seasonPts,setSeasonPts,seasonGP,standingsSource,mwOverrides,setMwOverrides,entryFees,setEntryFees,onForceRefresh,seasonLabel,setSeasonLabel,emails,setEmails,demoMode,setDemoMode}){
+function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,jokers,setJokers,pins,setPins,reveals,setReveals,deadlines,setDeadlines,manuallyUnlocked,setManuallyUnlocked,players,setPlayers,admin,setAdmin,toast_,saveAll,syncStatus,setSupaLoading,seasonActual,setSeasonActual,seasonPreds,setSeasonPreds,seasonPts,setSeasonPts,seasonGP,standingsSource,mwOverrides,setMwOverrides,entryFees,setEntryFees,onForceRefresh,seasonLabel,setSeasonLabel,emails,setEmails,demoMode,setDemoMode,leagueRevealed,setLeagueRevealed}){
   const[pw,setPw]=useState("");
   const[ew,setEw]=useState(()=>{
     const today=new Date(); today.setHours(0,0,0,0);
@@ -3788,6 +3790,32 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
       </AdminGroup>
 
       {/* ── SEASON ── collapsed */}
+      <AdminGroup title="🏆 League Table Reveal" defaultOpen={false} accent="#34D39944">
+        <div style={{...S.card, background:leagueRevealed?"#064E3B22":"#0F172A", border:`1px solid ${leagueRevealed?"#34D399":"#334155"}`}}>
+          <div style={{fontSize:13,color:"#94A3B8",marginBottom:8}}>
+            {leagueRevealed
+              ? "✅ League table predictions are revealed — players can see each other's predicted tables. Predictions are now locked."
+              : "🔒 League table predictions are hidden. Players can only see their own. Reveal to show everyone's predictions and lock them."}
+          </div>
+          <button onClick={()=>{
+            if(leagueRevealed){
+              toast_("League table is already revealed and locked — predictions cannot be hidden again","error");
+              return;
+            }
+            setLeagueRevealed(true);
+            supa.setState("league_revealed", true).catch(()=>{});
+            toast_("✅ League table predictions revealed and locked!");
+          }} disabled={leagueRevealed}
+            style={{...S.sb, width:"100%", padding:"10px",
+              background:leagueRevealed?"#064E3B":"#7C3AED",
+              color:leagueRevealed?"#34D399":"#fff",
+              border:leagueRevealed?"2px solid #34D399":"none",
+              fontSize:14, fontWeight:700,
+              opacity:leagueRevealed?0.7:1, cursor:leagueRevealed?"not-allowed":"pointer"}}>
+            {leagueRevealed?"✅ Revealed & Locked":"🔓 Reveal League Table Predictions"}
+          </button>
+        </div>
+      </AdminGroup>
       <AdminGroup title="🗄️ Season" defaultOpen={false} accent="#F59E0B44">
         <div style={S.card}>
           <span style={S.ct}>💰 Entry Fee</span>
@@ -4870,7 +4898,7 @@ function SeasonAdminPanel({seasonActual, setSeasonActual, seasonPts, setSeasonPt
   );
 }
 
-function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seasonPts, seasonGP, saveAll, toast_, setTab, seasonLabel}) {
+function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seasonPts, seasonGP, saveAll, toast_, setTab, seasonLabel, leagueRevealed}) {
   const [draft, setDraft] = useState([...PL_TEAMS_2526].sort());
   const [dragIdx, setDragIdx] = useState(null);
   const [dragOver, setDragOver] = useState(null);
@@ -5105,8 +5133,22 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
             {/* Divider */}
             <div style={{width:2,background:"#334155",borderRadius:2,flexShrink:0,margin:"22px 2px 0"}}/>
 
+            {/* Banner: show reveal status */}
+            {!leagueRevealed && (
+              <div style={{width:"100%",background:"#78350F22",border:"1px solid #78350F",
+                borderRadius:8,padding:"8px 12px",margin:"8px 0",fontSize:12,color:"#F59E0B"}}>
+                🔒 Other players' predictions hidden until admin reveals the league table
+              </div>
+            )}
+            {leagueRevealed && (
+              <div style={{width:"100%",background:"#064E3B22",border:"1px solid #34D399",
+                borderRadius:8,padding:"8px 12px",margin:"8px 0",fontSize:12,color:"#34D399"}}>
+                ✅ League table predictions revealed — all predictions visible and locked
+              </div>
+            )}
             {/* Each player: prediction column + pts column */}
-            {players.filter(p=>seasonPreds?.[p]).map(p => {
+            {/* Only show own prediction until league is revealed; after reveal show all */}
+            {players.filter(p=>seasonPreds?.[p] && (leagueRevealed || p===me)).map(p => {
               const totalPts = calcSeasonScore(seasonPreds[p], seasonActual);
               return (
                 <React.Fragment key={p}>
@@ -5226,6 +5268,14 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
                 </div>
               );
             })}
+          </div>
+        ) : leagueRevealed ? (
+          <div style={{...S.card, textAlign:"center"}}>
+            <div style={{fontSize:16,marginBottom:8}}>🔒</div>
+            <div style={{fontWeight:700,color:"#F59E0B",marginBottom:6}}>League table predictions are locked</div>
+            <div style={{color:"#64748B",fontSize:13}}>
+              The admin has revealed all predictions — you can no longer submit or change your league table prediction.
+            </div>
           </div>
         ) : (
           <div style={S.card}>
