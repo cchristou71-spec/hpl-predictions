@@ -2112,24 +2112,21 @@ function Predict({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
 
 function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicReveals,players,jokers,admin,me,demoMode,setDemoMode}){
   const df=displayFixtures||fixtures;
-  const allMWs=Object.keys(df).map(Number).sort((a,b)=>a-b);
-  // Only show MWs that are revealed (admin sees all revealed, others see only public)
-  const visibleMWs=allMWs.filter(w=>{
-    if(admin) return reveals[w]===true;
-    return publicReveals[w]===true;
-  });
+  // Show ALL match weeks — past (revealed) with predictions, future with fixtures only
+  const allMWs=Object.keys(df).map(Number).filter(w=>(df[w]||[]).length>0).sort((a,b)=>a-b);
+  const isRevealed=(w)=>admin?reveals[w]===true:publicReveals[w]===true;
 
-  if(visibleMWs.length===0){
+  if(allMWs.length===0){
     return(
       <div style={{padding:24,textAlign:"center"}}>
         {setDemoMode&&(
           <button onClick={()=>setDemoMode(true)}
             style={{background:"#7C3AED",color:"#fff",border:"none",borderRadius:8,
-              padding:"10px 20px",fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:16,display:"block",margin:"0 auto 12px"}}>
+              padding:"10px 20px",fontSize:14,fontWeight:700,cursor:"pointer",display:"block",margin:"0 auto 12px"}}>
             🎭 Preview with demo data
           </button>
         )}
-        <div style={{color:"#64748B",fontSize:14}}>No match weeks revealed yet.</div>
+        <div style={{color:"#64748B",fontSize:14}}>No fixtures loaded yet.</div>
       </div>
     );
   }
@@ -2186,21 +2183,31 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
         </div>
       )}
     <div style={{padding:"12px 0 80px",overflowX:"auto"}}>
-      {visibleMWs.map(w=>{
+      {allMWs.map(w=>{
         const fxs=(df[w]||[]).sort((a,b)=>new Date(a.currentDate||a.date)-new Date(b.currentDate||b.date));
         const fxsWithResult=fxs.filter(fx=>fx.result);
-        if(!fxsWithResult.length)return null;
+        const revealed=isRevealed(w);
+        const isFuture=fxsWithResult.length===0;
 
-        // MW totals per player
+        // MW totals per player (only for revealed MWs)
         const mwTotals={};
-        sortedPlayers.forEach(p=>{
-          mwTotals[p]=fxsWithResult.reduce((sum,fx)=>{
-            const pred=(predictions[p]||{})[fx.id];
-            const pts=pred?calcPts(pred,fx.result):null;
-            const jk=(jokers[p]||{})[w];
-            return sum+(pts!=null?pts*(jk?2:1):0);
-          },0);
-        });
+        if(revealed){
+          sortedPlayers.forEach(p=>{
+            mwTotals[p]=fxsWithResult.reduce((sum,fx)=>{
+              const pred=(predictions[p]||{})[fx.id];
+              const pts=pred?calcPts(pred,fx.result):null;
+              const jk=(jokers[p]||{})[w];
+              return sum+(pts!=null?pts*(jk?2:1):0);
+            },0);
+          });
+        }
+
+        // Status tag
+        const statusTag = isFuture
+          ? <span style={{fontSize:10,color:"#64748B",background:"#1E293B",borderRadius:4,padding:"2px 6px"}}>Upcoming</span>
+          : revealed
+          ? <span style={{fontSize:10,color:"#34D399",background:"#064E3B33",borderRadius:4,padding:"2px 6px"}}>Revealed</span>
+          : <span style={{fontSize:10,color:"#F59E0B",background:"#78350F33",borderRadius:4,padding:"2px 6px"}}>Pending reveal</span>;
 
         return(
           <div key={w} style={{marginBottom:32}}>
@@ -2208,92 +2215,116 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
             <div style={{display:"flex",alignItems:"center",gap:12,padding:"6px 16px",
               background:"#1E293B",borderBottom:"1px solid #334155"}}>
               <div style={{fontSize:13,fontWeight:800,color:"#A78BFA"}}>Match Week {w}</div>
-              <div style={{fontSize:11,color:"#64748B"}}>{fxsWithResult.length} result{fxsWithResult.length!==1?"s":""}</div>
+              <div style={{fontSize:11,color:"#64748B"}}>{isFuture?`${fxs.length} fixture${fxs.length!==1?"s":""}`:`${fxsWithResult.length} result${fxsWithResult.length!==1?"s":""}`}</div>
+              {statusTag}
             </div>
 
-            {/* Scrollable table */}
-            <div style={{overflowX:"auto"}}>
-              <table style={{borderCollapse:"collapse",width:"100%",minWidth:sortedPlayers.length*colW+cellW+200}}>
-                <thead>
-                  <tr style={{background:"#0F172A"}}>
-                    <th style={{padding:"6px 12px",textAlign:"left",fontSize:11,color:"#64748B",
-                      fontWeight:600,width:80,position:"sticky",left:0,background:"#0F172A",zIndex:2}}>Date</th>
-                    <th style={{padding:"6px 8px",textAlign:"left",fontSize:11,color:"#64748B",
-                      fontWeight:600,minWidth:160}}>Match</th>
-                    <th style={{padding:"6px 8px",textAlign:"center",fontSize:11,color:"#F59E0B",
-                      fontWeight:700,minWidth:cellW}}>Result</th>
-                    {sortedPlayers.map(p=>(
-                      <th key={p} style={{padding:"6px 4px",textAlign:"center",fontSize:11,
-                        color:p===me?"#A78BFA":"#94A3B8",fontWeight:p===me?800:600,
-                        minWidth:colW,maxWidth:colW}}>
-                        {p}{p===me?" ⭐":""}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {fxsWithResult.map((fx,i)=>(
-                    <tr key={fx.id} style={{background:i%2===0?"#1E293B11":"transparent",
-                      borderBottom:"1px solid #1E293B"}}>
-                      <td style={{padding:"6px 12px",fontSize:11,color:"#64748B",
-                        position:"sticky",left:0,background:i%2===0?"#0F172A":"#070B14",zIndex:1}}>
-                        {fmtDate(fx.currentDate||fx.date)}
-                      </td>
-                      <td style={{padding:"6px 8px",fontSize:12}}>
-                        <span style={{color:"#E2E8F0",fontWeight:500}}>{fx.home}</span>
-                        <span style={{color:"#475569",margin:"0 4px"}}>v</span>
-                        <span style={{color:"#E2E8F0",fontWeight:500}}>{fx.away}</span>
-                      </td>
-                      <td style={{padding:"6px 8px",textAlign:"center"}}>
-                        <span style={{fontSize:14,fontWeight:800,color:"#F59E0B"}}>
-                          {fx.result.homeGoals}–{fx.result.awayGoals}
-                        </span>
-                      </td>
+            {isFuture ? (
+              /* Future MW — show fixture list only */
+              <div style={{padding:"8px 0"}}>
+                {fxs.map((fx,i)=>(
+                  <div key={fx.id} style={{display:"flex",alignItems:"center",gap:8,
+                    padding:"6px 16px",borderBottom:"1px solid #0F172A",
+                    background:i%2===0?"#1E293B11":"transparent"}}>
+                    <span style={{fontSize:11,color:"#475569",width:70,flexShrink:0}}>{fmtDate(fx.currentDate||fx.date)}</span>
+                    <span style={{fontSize:12,color:"#E2E8F0",fontWeight:500}}>{fx.home}</span>
+                    <span style={{fontSize:11,color:"#475569",margin:"0 4px"}}>v</span>
+                    <span style={{fontSize:12,color:"#E2E8F0",fontWeight:500}}>{fx.away}</span>
+                  </div>
+                ))}
+              </div>
+            ) : revealed ? (
+              /* Revealed MW — show full predictions table */
+              <div style={{overflowX:"auto"}}>
+                <table style={{borderCollapse:"collapse",width:"100%",minWidth:sortedPlayers.length*colW+cellW+200}}>
+                  <thead>
+                    <tr style={{background:"#0F172A"}}>
+                      <th style={{padding:"6px 12px",textAlign:"left",fontSize:11,color:"#64748B",
+                        fontWeight:600,width:80,position:"sticky",left:0,background:"#0F172A",zIndex:2}}>Date</th>
+                      <th style={{padding:"6px 8px",textAlign:"left",fontSize:11,color:"#64748B",
+                        fontWeight:600,minWidth:160}}>Match</th>
+                      <th style={{padding:"6px 8px",textAlign:"center",fontSize:11,color:"#F59E0B",
+                        fontWeight:700,minWidth:cellW}}>Result</th>
                       {sortedPlayers.map(p=>{
-                        const pred=(predictions[p]||{})[fx.id];
-                        const pts=pred?calcPts(pred,fx.result):null;
                         const jk=(jokers[p]||{})[w];
-                        const fp=pts!=null?pts*(jk?2:1):null;
                         return(
-                          <td key={p} style={{padding:"4px",textAlign:"center",
-                            background:p===me?"#7C3AED11":"transparent"}}>
-                            {pred?(
-                              <div>
-                                <div style={{fontSize:12,color:"#CBD5E1",fontWeight:500}}>
-                                  {pred.homeGoals}–{pred.awayGoals}
-                                  {jk&&<span style={{color:"#F59E0B",fontSize:10}}> 🃏</span>}
-                                </div>
-                                <div style={{fontSize:11,fontWeight:700,color:ptColor(pts)}}>
-                                  {fp!=null?`+${fp}`:""}
-                                </div>
-                              </div>
-                            ):(
-                              <span style={{fontSize:11,color:"#334155"}}>—</span>
-                            )}
-                          </td>
+                          <th key={p} style={{padding:"6px 4px",textAlign:"center",fontSize:11,
+                            color:p===me?"#A78BFA":"#94A3B8",fontWeight:p===me?800:600,
+                            minWidth:colW,maxWidth:colW}}>
+                            {p}{p===me?" ⭐":""}{jk?" 🃏":""}
+                          </th>
                         );
                       })}
                     </tr>
-                  ))}
-                  {/* MW Totals row */}
-                  <tr style={{background:"#1E293B",borderTop:"2px solid #334155"}}>
-                    <td colSpan={3} style={{padding:"6px 12px",fontSize:12,fontWeight:700,
-                      color:"#94A3B8",position:"sticky",left:0,background:"#1E293B",zIndex:1}}>
-                      MW {w} Total
-                    </td>
-                    {sortedPlayers.map(p=>(
-                      <td key={p} style={{padding:"6px 4px",textAlign:"center",
-                        background:p===me?"#7C3AED22":"transparent"}}>
-                        <span style={{fontSize:13,fontWeight:800,
-                          color:mwTotals[p]>0?"#34D399":"#475569"}}>
-                          {mwTotals[p]}
-                        </span>
-                      </td>
+                  </thead>
+                  <tbody>
+                    {fxsWithResult.map((fx,i)=>(
+                      <tr key={fx.id} style={{background:i%2===0?"#1E293B11":"transparent",
+                        borderBottom:"1px solid #1E293B"}}>
+                        <td style={{padding:"6px 12px",fontSize:11,color:"#64748B",
+                          position:"sticky",left:0,background:i%2===0?"#0F172A":"#070B14",zIndex:1}}>
+                          {fmtDate(fx.currentDate||fx.date)}
+                        </td>
+                        <td style={{padding:"6px 8px",fontSize:12}}>
+                          <span style={{color:"#E2E8F0",fontWeight:500}}>{fx.home}</span>
+                          <span style={{color:"#475569",margin:"0 4px"}}>v</span>
+                          <span style={{color:"#E2E8F0",fontWeight:500}}>{fx.away}</span>
+                        </td>
+                        <td style={{padding:"6px 8px",textAlign:"center"}}>
+                          <span style={{fontSize:14,fontWeight:800,color:"#F59E0B"}}>
+                            {fx.result.homeGoals}–{fx.result.awayGoals}
+                          </span>
+                        </td>
+                        {sortedPlayers.map(p=>{
+                          const pred=(predictions[p]||{})[fx.id];
+                          const pts=pred?calcPts(pred,fx.result):null;
+                          const jk=(jokers[p]||{})[w];
+                          const fp=pts!=null?pts*(jk?2:1):null;
+                          return(
+                            <td key={p} style={{padding:"4px",textAlign:"center",
+                              background:p===me?"#7C3AED11":"transparent"}}>
+                              {pred?(
+                                <div>
+                                  <div style={{fontSize:12,color:"#CBD5E1",fontWeight:500}}>
+                                    {pred.homeGoals}–{pred.awayGoals}
+                                  </div>
+                                  <div style={{fontSize:11,fontWeight:700,color:ptColor(pts)}}>
+                                    {fp!=null?(jk?`+${fp} 🃏`:`+${fp}`):""}
+                                  </div>
+                                </div>
+                              ):(
+                                <span style={{fontSize:11,color:"#334155"}}>—</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
                     ))}
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+                    {/* MW Totals row */}
+                    <tr style={{background:"#1E293B",borderTop:"2px solid #334155"}}>
+                      <td colSpan={3} style={{padding:"6px 12px",fontSize:12,fontWeight:700,
+                        color:"#94A3B8",position:"sticky",left:0,background:"#1E293B",zIndex:1}}>
+                        MW {w} Total
+                      </td>
+                      {sortedPlayers.map(p=>(
+                        <td key={p} style={{padding:"6px 4px",textAlign:"center",
+                          background:p===me?"#7C3AED22":"transparent"}}>
+                          <span style={{fontSize:13,fontWeight:800,
+                            color:mwTotals[p]>0?"#34D399":"#475569"}}>
+                            {mwTotals[p]}
+                          </span>
+                        </td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              /* Results exist but not yet revealed */
+              <div style={{padding:"16px",textAlign:"center",color:"#475569",fontSize:13}}>
+                🔒 Predictions hidden until reveal
+              </div>
+            )}
           </div>
         );
       })}
