@@ -1544,7 +1544,7 @@ function App(){
           📱 To enter predictions: tap <b style={{color:"#A78BFA",cursor:"pointer",textDecoration:"underline"}} onClick={()=>setTab("predict")}>Predictions</b> &rarr; enter your name &rarr; enter your PIN
         </div>
         <nav style={S.nav}>
-          {[["predict","🎯 Predict"],["historicresults","📋 Results"],["preds","📊 All Predictions"],["league","🏆 Progress"],["season","📅 League"],["admin","⚙️ Admin"]].map(([id,lbl])=>(
+          {[["predict","🎯 Predict"],["historicresults","📋 Results"],["preds","📊 Detailed Results"],["league","🏆 Progress"],["season","📅 League"],["admin","⚙️ Admin"]].map(([id,lbl])=>(
             <button key={id} style={{...S.nb,...(tab===id?S.nba:{})}} onClick={()=>setTab(id)}>{lbl}</button>
           ))}
         </nav>
@@ -2116,6 +2116,14 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
   const allMWs=Object.keys(df).map(Number).filter(w=>w>=1&&w<=38&&(df[w]||[]).length>0).sort((a,b)=>a-b);
   const isRevealed=(w)=>admin?reveals[w]===true:publicReveals[w]===true;
 
+  // Auto-expand: find the current active MW (last revealed, or first upcoming if none revealed)
+  const defaultMW = React.useMemo(()=>{
+    const revealedMWList=allMWs.filter(w=>isRevealed(w));
+    if(revealedMWList.length) return revealedMWList[revealedMWList.length-1]; // last revealed
+    return allMWs[0]||null; // first upcoming
+  },[allMWs.join(',')]);
+  const[expandedMW,setExpandedMW]=React.useState(()=>defaultMW);
+
   if(allMWs.length===0){
     return(
       <div style={{padding:24,textAlign:"center"}}>
@@ -2212,15 +2220,17 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
 
         return(
           <div key={w} style={{marginBottom:32}}>
-            {/* MW Header */}
-            <div style={{display:"flex",alignItems:"center",gap:12,padding:"6px 16px",
-              background:"#1E293B",borderBottom:"1px solid #334155"}}>
+            {/* MW Header — clickable to expand/collapse */}
+            <div onClick={()=>setExpandedMW(expandedMW===w?null:w)}
+              style={{display:"flex",alignItems:"center",gap:12,padding:"8px 16px",
+              background:"#1E293B",borderBottom:"1px solid #334155",cursor:"pointer",userSelect:"none"}}>
               <div style={{fontSize:13,fontWeight:800,color:"#A78BFA"}}>Match Week {w}</div>
               <div style={{fontSize:11,color:"#64748B"}}>{isFuture?`${fxs.length} fixture${fxs.length!==1?"s":""}`:`${fxsWithResult.length} result${fxsWithResult.length!==1?"s":""}`}</div>
               {statusTag}
+              <span style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>{expandedMW===w?"▲":"▼"}</span>
             </div>
 
-            {isFuture ? (
+            {expandedMW===w && isFuture ? (
               /* Future MW — show fixture list only */
               <div style={{padding:"8px 0"}}>
                 {fxs.map((fx,i)=>(
@@ -2240,7 +2250,7 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
                   </div>
                 ))}
               </div>
-            ) : revealed ? (
+            ) : expandedMW===w && revealed ? (
               /* Revealed MW — show full predictions table */
               <div style={{overflowX:"auto"}}>
                 <table style={{borderCollapse:"collapse",width:"100%",minWidth:sortedPlayers.length*colW+cellW+200}}>
@@ -2326,12 +2336,12 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
                   </tbody>
                 </table>
               </div>
-            ) : (
+            ) : expandedMW===w ? (
               /* Results exist but not yet revealed */
               <div style={{padding:"16px",textAlign:"center",color:"#475569",fontSize:13}}>
                 🔒 Predictions hidden until reveal
               </div>
-            )}
+            ) : null}
           </div>
         );
       })}
