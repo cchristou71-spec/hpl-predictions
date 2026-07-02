@@ -2136,9 +2136,10 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
     return new Date(d).toLocaleDateString("en-GB",{day:"numeric",month:"short"});
   };
 
-  // player order: sort by total points desc
+  // player order: sort by total points desc (only count revealed MWs)
+  const revealedMWs=allMWs.filter(w=>isRevealed(w));
   const sortedPlayers=[...players].sort((a,b)=>{
-    const ptsA=visibleMWs.reduce((sum,w)=>{
+    const ptsA=revealedMWs.reduce((sum,w)=>{
       const fxs=df[w]||[];
       return sum+fxs.reduce((s,fx)=>{
         if(!fx.result)return s;
@@ -2147,7 +2148,7 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
         return s+(calcPts(pred,fx.result)||0);
       },0);
     },0);
-    const ptsB=visibleMWs.reduce((sum,w)=>{
+    const ptsB=revealedMWs.reduce((sum,w)=>{
       const fxs=df[w]||[];
       return sum+fxs.reduce((s,fx)=>{
         if(!fx.result)return s;
