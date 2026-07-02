@@ -1517,13 +1517,30 @@ function App(){
     "Terry":  {"d1-0":{homeGoals:1,awayGoals:1},"d1-1":{homeGoals:1,awayGoals:1},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:1},"d1-4":{homeGoals:1,awayGoals:1},"d2-0":{homeGoals:1,awayGoals:1},"d2-1":{homeGoals:1,awayGoals:1},"d2-2":{homeGoals:1,awayGoals:1}},
     "Alasdair":{"d1-0":{homeGoals:4,awayGoals:1},"d1-1":{homeGoals:0,awayGoals:2},"d1-2":{homeGoals:1,awayGoals:0},"d1-3":{homeGoals:1,awayGoals:2},"d1-4":{homeGoals:3,awayGoals:0},"d2-0":{homeGoals:1,awayGoals:2},"d2-1":{homeGoals:0,awayGoals:4},"d2-2":{homeGoals:2,awayGoals:2}},
   };
+  // Demo jokers: Cos plays joker in MW1, Trev in MW2
+  const DEMO_JOKERS = { "Cos":{1:true}, "Trev":{2:true} };
+  // Demo season: fake PL table for league tab preview
+  const DEMO_SEASON_ACTUAL = ["Man City","Arsenal","Liverpool","Chelsea","Spurs","Man Utd","Newcastle","Aston Villa","Brighton","Nottm Forest","Brentford","West Ham","Fulham","Wolves","Crystal Palace","Everton","Bournemouth","Ipswich","Leicester","Southampton"];
+  const DEMO_SEASON_PREDS = {
+    "Trev":    ["Man City","Liverpool","Arsenal","Chelsea","Spurs","Man Utd","Newcastle","Aston Villa","Brighton","Nottm Forest","Brentford","West Ham","Fulham","Wolves","Crystal Palace","Everton","Bournemouth","Ipswich","Leicester","Southampton"],
+    "Cos":     ["Arsenal","Man City","Liverpool","Spurs","Chelsea","Newcastle","Man Utd","Aston Villa","Brighton","Wolves","Nottm Forest","West Ham","Fulham","Brentford","Crystal Palace","Bournemouth","Everton","Ipswich","Leicester","Southampton"],
+    "Steve":   ["Liverpool","Man City","Arsenal","Chelsea","Newcastle","Spurs","Man Utd","Brighton","Aston Villa","Nottm Forest","West Ham","Wolves","Fulham","Brentford","Crystal Palace","Everton","Bournemouth","Ipswich","Leicester","Southampton"],
+    "Clive":   ["Man City","Arsenal","Chelsea","Liverpool","Spurs","Man Utd","Newcastle","Brighton","Aston Villa","Brentford","Nottm Forest","West Ham","Wolves","Fulham","Crystal Palace","Everton","Bournemouth","Ipswich","Leicester","Southampton"],
+    "Andrew":  ["Man City","Liverpool","Arsenal","Newcastle","Chelsea","Spurs","Man Utd","Brighton","Aston Villa","Nottm Forest","West Ham","Brentford","Wolves","Fulham","Crystal Palace","Everton","Bournemouth","Leicester","Ipswich","Southampton"],
+    "Pete":    ["Arsenal","Man City","Liverpool","Chelsea","Spurs","Newcastle","Man Utd","Aston Villa","Brighton","Nottm Forest","Wolves","West Ham","Brentford","Fulham","Crystal Palace","Everton","Bournemouth","Ipswich","Leicester","Southampton"],
+    "Terry":   ["Man City","Arsenal","Liverpool","Chelsea","Spurs","Man Utd","Newcastle","Aston Villa","Brighton","Nottm Forest","Brentford","Fulham","West Ham","Wolves","Crystal Palace","Everton","Bournemouth","Ipswich","Leicester","Southampton"],
+    "Alasdair":["Liverpool","Arsenal","Man City","Chelsea","Newcastle","Spurs","Man Utd","Brighton","Aston Villa","Nottm Forest","West Ham","Wolves","Brentford","Fulham","Crystal Palace","Everton","Bournemouth","Ipswich","Leicester","Southampton"],
+  };
   const effectiveFixtures = demoMode ? DEMO_FIXTURES : displayFixtures;
   const effectivePredictions = demoMode ? DEMO_PREDS : predictions;
   const effectiveReveals = demoMode ? {1:true,2:true} : reveals;
   const effectivePublicReveals = demoMode ? {1:true,2:true} : publicReveals;
   const effectivePlayers = demoMode ? DEMO_PLAYERS : players;
+  const effectiveJokers = demoMode ? DEMO_JOKERS : jokers;
+  const effectiveSeasonActual = demoMode ? DEMO_SEASON_ACTUAL : seasonActual;
+  const effectiveSeasonPreds = demoMode ? DEMO_SEASON_PREDS : seasonPreds;
 
-  const props={fixtures:effectiveFixtures,displayFixtures:effectiveFixtures,predictions:effectivePredictions,reveals:effectiveReveals,publicReveals:effectivePublicReveals,deadlines,players:effectivePlayers,jokers,isPast,jokersUsed,hasJoker,canJoker};
+  const props={fixtures:effectiveFixtures,displayFixtures:effectiveFixtures,predictions:effectivePredictions,reveals:effectiveReveals,publicReveals:effectivePublicReveals,deadlines,players:effectivePlayers,jokers:effectiveJokers,isPast,jokersUsed,hasJoker,canJoker};
 
   return(
     <div style={S.app}>
@@ -1544,7 +1561,7 @@ function App(){
           📱 To enter predictions: tap <b style={{color:"#A78BFA",cursor:"pointer",textDecoration:"underline"}} onClick={()=>setTab("predict")}>Predictions</b> &rarr; enter your name &rarr; enter your PIN
         </div>
         <nav style={S.nav}>
-          {[["predict","🎯 Predict"],["historicresults","📋 Results"],["preds","📊 Detailed Results"],["league","🏆 Progress"],["season","📅 League"],["admin","⚙️ Admin"]].map(([id,lbl])=>(
+          {[["predict","🎯 Predict"],["preds","📊 Results"],["historicresults","📋 Detailed Results"],["league","🏆 Progress"],["season","📅 League"],["admin","⚙️ Admin"]].map(([id,lbl])=>(
             <button key={id} style={{...S.nb,...(tab===id?S.nba:{})}} onClick={()=>setTab(id)}>{lbl}</button>
           ))}
         </nav>
@@ -1586,9 +1603,9 @@ function App(){
         {tab==="historicresults"&&<HistoricResults fixtures={effectiveFixtures} displayFixtures={effectiveFixtures} predictions={effectivePredictions} reveals={effectiveReveals} publicReveals={effectivePublicReveals} players={effectivePlayers} jokers={jokers} admin={admin} me={me} demoMode={demoMode} setDemoMode={setDemoMode}/>}
         {tab==="preds"&&<Results {...props} me={me} admin={admin} expMW={expMW} setExpMW={setExpMW} search={search} setSearch={setSearch} searchMode={searchMode} setSearchMode={setSearchMode} homeQ={homeQ} setHomeQ={setHomeQ} awayQ={awayQ} setAwayQ={setAwayQ}/>}
         {tab==="season"&&<SeasonTab
-          players={players} me={me}
-          seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds}
-          seasonActual={seasonActual} seasonPts={seasonPts} seasonGP={seasonGP}
+          players={effectivePlayers} me={me}
+          seasonPreds={effectiveSeasonPreds} setSeasonPreds={setSeasonPreds}
+          seasonActual={effectiveSeasonActual} seasonPts={seasonPts} seasonGP={seasonGP}
           saveAll={saveAll} toast_={toast_} setTab={setTab} seasonLabel={seasonLabel}
         />}
         {tab==="league"&&<League {...props} me={me}/>}
@@ -2275,6 +2292,16 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
                     </tr>
                   </thead>
                   <tbody>
+                    {/* Joker row — show which players used joker this MW */}
+                    {sortedPlayers.some(p=>(jokers[p]||{})[w])&&(
+                      <tr style={{background:"#78350F22",borderBottom:"1px solid #334155"}}>
+                        <td colSpan={3} style={{padding:"3px 12px",fontSize:10,color:"#F59E0B",fontStyle:"italic"}}>🃏 Joker played</td>
+                        {sortedPlayers.map(p=>{
+                          const jk=(jokers[p]||{})[w];
+                          return <td key={p} style={{textAlign:"center",fontSize:11,color:"#F59E0B",padding:"3px 4px",background:p===me?"#7C3AED11":"transparent"}}>{jk?"🃏":""}</td>;
+                        })}
+                      </tr>
+                    )}
                     {fxsWithResult.map((fx,i)=>(
                       <tr key={fx.id} style={{background:i%2===0?"#1E293B11":"transparent",
                         borderBottom:"1px solid #1E293B"}}>
