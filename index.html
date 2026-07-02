@@ -2258,7 +2258,7 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
             mwTotals[p]=fxsWithResult.reduce((sum,fx)=>{
               const pred=(predictions[p]||{})[fx.id];
               const pts=pred?calcPts(pred,fx.result):null;
-              const jk=(jokers[p]||{})[w];
+              const jk=pred?.joker===true; // joker on THIS fixture only
               return sum+(pts!=null?pts*(jk?2:1):0);
             },0);
           });
@@ -2358,7 +2358,7 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
                         {sortedPlayers.map(p=>{
                           const pred=(predictions[p]||{})[fx.id];
                           const pts=pred?calcPts(pred,fx.result):null;
-                          const jk=(jokers[p]||{})[w];
+                          const jk=pred?.joker===true; // joker on THIS fixture only
                           const fp=pts!=null?pts*(jk?2:1):null;
                           return(
                             <td key={p} style={{padding:"4px",textAlign:"center",
