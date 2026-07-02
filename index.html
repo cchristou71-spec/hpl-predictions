@@ -1523,7 +1523,7 @@ function App(){
   const effectivePublicReveals = demoMode ? {1:true,2:true} : publicReveals;
   const effectivePlayers = demoMode ? DEMO_PLAYERS : players;
 
-  const props={fixtures,displayFixtures,predictions,reveals,publicReveals,deadlines,players,jokers,isPast,jokersUsed,hasJoker,canJoker};
+  const props={fixtures:effectiveFixtures,displayFixtures:effectiveFixtures,predictions:effectivePredictions,reveals:effectiveReveals,publicReveals:effectivePublicReveals,deadlines,players:effectivePlayers,jokers,isPast,jokersUsed,hasJoker,canJoker};
 
   return(
     <div style={S.app}>
@@ -1592,7 +1592,7 @@ function App(){
           saveAll={saveAll} toast_={toast_} setTab={setTab} seasonLabel={seasonLabel}
         />}
         {tab==="league"&&<League {...props} me={me}/>}
-        {tab==="admin"&&<Admin {...props} fixtures={fixtures} displayFixtures={displayFixtures} setFixtures={setFixtures} predictions={predictions} setPredictions={setPredictions} jokers={jokers} setJokers={setJokers} pins={pins} setPins={setPins} reveals={reveals} setReveals={setReveals} deadlines={deadlines} setDeadlines={setDeadlines} manuallyUnlocked={manuallyUnlocked} setManuallyUnlocked={setManuallyUnlocked} players={players} setPlayers={setPlayers} admin={admin} setAdmin={setAdmin} toast_={toast_} saveAll={saveAll} syncStatus={syncStatus} setSupaLoading={setSupaLoading} seasonActual={seasonActual} setSeasonActual={setSeasonActual} seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds} seasonPts={seasonPts} setSeasonPts={setSeasonPts} seasonGP={seasonGP} standingsSource={standingsSource} mwOverrides={mwOverrides} setMwOverrides={setMwOverrides} entryFees={entryFees} setEntryFees={setEntryFees} seasonLabel={seasonLabel} setSeasonLabel={setSeasonLabel} emails={emails} setEmails={setEmails} onForceRefresh={()=>{setRefreshStatus("loading");liveRefresh(fixtures, mwOverrides).then(({fixtures:nFx,updated,dateChanges,fixturesBuilt})=>{if(fixturesBuilt||updated>0||dateChanges>0)setFixtures(nFx);setRefreshStatus({updated,dateChanges});setTimeout(()=>setRefreshStatus(null),4000);toast_(fixturesBuilt?`✅ Fixtures loaded from ESPN! ${Object.keys(nFx).length} match weeks`:`ESPN refresh: ${updated} results, ${dateChanges} date changes`);}).catch(e=>{setRefreshStatus(null);toast_("ESPN refresh failed: "+e.message,"error");});}}/>}
+        {tab==="admin"&&<Admin {...props} fixtures={fixtures} displayFixtures={displayFixtures} demoMode={demoMode} setDemoMode={setDemoMode} setFixtures={setFixtures} predictions={predictions} setPredictions={setPredictions} jokers={jokers} setJokers={setJokers} pins={pins} setPins={setPins} reveals={reveals} setReveals={setReveals} deadlines={deadlines} setDeadlines={setDeadlines} manuallyUnlocked={manuallyUnlocked} setManuallyUnlocked={setManuallyUnlocked} players={players} setPlayers={setPlayers} admin={admin} setAdmin={setAdmin} toast_={toast_} saveAll={saveAll} syncStatus={syncStatus} setSupaLoading={setSupaLoading} seasonActual={seasonActual} setSeasonActual={setSeasonActual} seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds} seasonPts={seasonPts} setSeasonPts={setSeasonPts} seasonGP={seasonGP} standingsSource={standingsSource} mwOverrides={mwOverrides} setMwOverrides={setMwOverrides} entryFees={entryFees} setEntryFees={setEntryFees} seasonLabel={seasonLabel} setSeasonLabel={setSeasonLabel} emails={emails} setEmails={setEmails} onForceRefresh={()=>{setRefreshStatus("loading");liveRefresh(fixtures, mwOverrides).then(({fixtures:nFx,updated,dateChanges,fixturesBuilt})=>{if(fixturesBuilt||updated>0||dateChanges>0)setFixtures(nFx);setRefreshStatus({updated,dateChanges});setTimeout(()=>setRefreshStatus(null),4000);toast_(fixturesBuilt?`✅ Fixtures loaded from ESPN! ${Object.keys(nFx).length} match weeks`:`ESPN refresh: ${updated} results, ${dateChanges} date changes`);}).catch(e=>{setRefreshStatus(null);toast_("ESPN refresh failed: "+e.message,"error");});}}/>}
       </main>
     </div>
   );
@@ -3315,7 +3315,7 @@ function AdminGroup({title, defaultOpen=false, accent="#334155", children}) {
   );
 }
 
-function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,jokers,setJokers,pins,setPins,reveals,setReveals,deadlines,setDeadlines,manuallyUnlocked,setManuallyUnlocked,players,setPlayers,admin,setAdmin,toast_,saveAll,syncStatus,setSupaLoading,seasonActual,setSeasonActual,seasonPreds,setSeasonPreds,seasonPts,setSeasonPts,seasonGP,standingsSource,mwOverrides,setMwOverrides,entryFees,setEntryFees,onForceRefresh,seasonLabel,setSeasonLabel,emails,setEmails}){
+function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,jokers,setJokers,pins,setPins,reveals,setReveals,deadlines,setDeadlines,manuallyUnlocked,setManuallyUnlocked,players,setPlayers,admin,setAdmin,toast_,saveAll,syncStatus,setSupaLoading,seasonActual,setSeasonActual,seasonPreds,setSeasonPreds,seasonPts,setSeasonPts,seasonGP,standingsSource,mwOverrides,setMwOverrides,entryFees,setEntryFees,onForceRefresh,seasonLabel,setSeasonLabel,emails,setEmails,demoMode,setDemoMode}){
   const[pw,setPw]=useState("");
   const[ew,setEw]=useState(()=>{
     const today=new Date(); today.setHours(0,0,0,0);
@@ -3462,6 +3462,21 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
 
 
       {/* ── WEEKLY ── open by default */}
+      <AdminGroup title="🎭 Demo Mode" defaultOpen={false}>
+        <div style={{...S.card, background:"#7C3AED11", border:"1px solid #7C3AED44"}}>
+          <div style={{fontSize:13,color:"#94A3B8",marginBottom:8}}>
+            Populate all tabs with fake data to preview the full app before the season starts.
+          </div>
+          <button onClick={()=>{ setDemoMode(!demoMode); toast_(demoMode?"Demo mode off — showing real data":"🎭 Demo mode on — showing fake data for 2 match weeks"); }}
+            style={{...S.sb, background:demoMode?"#064E3B":"#7C3AED", color:demoMode?"#34D399":"#fff",
+              border:demoMode?"2px solid #34D399":"2px solid #7C3AED", width:"100%", padding:"10px", fontSize:14, fontWeight:700}}>
+            {demoMode?"✅ Demo ON — tap to turn off":"🎭 Turn on demo mode"}
+          </button>
+          {demoMode&&<div style={{fontSize:11,color:"#F59E0B",marginTop:8,textAlign:"center"}}>
+            ⚡ All tabs showing fake MW1 + MW2 data. Turn off to return to real data.
+          </div>}
+        </div>
+      </AdminGroup>
       <AdminGroup title="📅 Weekly" defaultOpen={true} accent="#3B82F644">
         <div style={{...S.card,border:"1px solid #3B82F644",marginBottom:12}}>
           <span style={S.ct}>📋 Results & Fixture Dates</span>
