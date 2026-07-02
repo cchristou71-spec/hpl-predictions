@@ -475,42 +475,61 @@ async function liveRefresh(fixtures, mwOverrides) {
 
       if (validEvents.length === 0) return { fixtures, updated: 0, dateChanges: 0 };
 
-      // Decide MW assignment: prefer ESPN's week.number if every event has it; otherwise derive from date grouping.
-      const allHaveEspnMw = validEvents.every(e => e.espnMw);
-      let mwOf;
-      if (allHaveEspnMw) {
-        mwOf = e => e.espnMw;
-      } else {
-        // Group into match weeks by 7-day buckets starting from the earliest fixture date,
-        // anchored to a Monday so a Fri–Mon round stays in the same bucket.
-        const earliest = new Date(Math.min(...validEvents.map(e => e.dateObj.getTime())));
-        const earliestDay = earliest.getDay(); // 0=Sun..6=Sat
-        const toMonday = earliestDay === 0 ? 6 : earliestDay - 1;
-        const anchor = new Date(earliest); anchor.setDate(anchor.getDate() - toMonday); anchor.setHours(0,0,0,0);
-        mwOf = e => Math.floor((e.dateObj - anchor) / (7*24*60*60*1000)) + 1;
-      }
+      // Sort all fixtures by date, then assign exactly 10 per match week.
+      // This ensures 38 MWs of 10 games each regardless of ESPN's week numbering.
+      // Within each MW, order by date then home team name.
+      const sorted = [...validEvents].sort((a, b) => {
+        if (a.dateObj - b.dateObj !== 0) return a.dateObj - b.dateObj;
+        return a.home.localeCompare(b.home);
+      });
 
+      // Deduplicate (same home+away pair)
+      const seen = new Set();
+      const deduped = sorted.filter(e => {
+        const key = `${e.home}|${e.away}`;
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+
+      const GAMES_PER_MW = 10;
       const built = {};
-      validEvents.forEach(e => {
-        const mw = mwOf(e);
-        if (!mw || mw < 1) return;
+      deduped.forEach((e, i) => {
+        const mw = Math.floor(i / GAMES_PER_MW) + 1;
+        if (mw > 38) return; // cap at 38 MWs
         const evDate = e.dateObj.toLocaleDateString("en-CA", {timeZone:"Europe/London"});
         const evTime = e.dateObj.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit", timeZone:"Europe/London"});
         if (!built[mw]) built[mw] = [];
-        const exists = built[mw].some(f => f.home === e.home && f.away === e.away);
-        if (exists) return;
         const idx = built[mw].length;
-        const id = `${mw}-${idx}`;
-        built[mw].push({ id, mw, home: e.home, away: e.away, date: evDate, time: evTime,
-          currentDate: evDate, currentTime: evTime, result: e.result });
+        built[mw].push({ id: `${mw}-${idx}`, mw, home: e.home, away: e.away,
+          date: evDate, time: evTime, currentDate: evDate, currentTime: evTime, result: e.result });
+      });
+
+      // Auto-set deadlines: Wednesday 19:00 before the first game of each MW
+      const autoDeadlines = {};
+      Object.entries(built).forEach(([mwStr, fxs]) => {
+        const mwNum = parseInt(mwStr);
+        const firstDate = fxs.reduce((min, fx) => fx.date < min ? fx.date : min, fxs[0].date);
+        const d = new Date(firstDate + "T12:00:00");
+        // Find the Wednesday before (or on) the first game
+        const day = d.getDay(); // 0=Sun,1=Mon,...,3=Wed,...,6=Sat
+        const daysBack = day >= 3 ? day - 3 : day + 4; // days back to Wednesday
+        d.setDate(d.getDate() - daysBack);
+        autoDeadlines[mwNum] = `${d.toLocaleDateString("en-CA")}T19:00`;
       });
 
       if (Object.keys(built).length > 0) {
-        console.log(`✅ Built ${Object.keys(built).length} match weeks from ESPN (mode: ${allHaveEspnMw ? "espn-week" : "date-grouped"})`);
-        // Save to Supabase so it persists across refreshes
+        console.log(`✅ Built ${Object.keys(built).length} match weeks from ESPN (10 games/MW)`);
+        // Save fixtures and auto-deadlines to Supabase
         supa.setState("live_fixtures", built).catch(e =>
           console.log("live_fixtures save failed:", e.message)
         );
+        // Only set deadlines if none exist yet (don't overwrite admin-set ones)
+        supa.getState("deadlines").then(existing => {
+          if (!existing || Object.keys(existing).length === 0) {
+            supa.setState("deadlines", autoDeadlines).catch(()=>{});
+            console.log("✅ Auto-set deadlines (Wed 19:00 before each MW)");
+          }
+        }).catch(()=>{});
         return {
           fixtures: built,
           updated: Object.values(built).reduce((n,l)=>n+l.filter(f=>f.result).length,0),
@@ -1600,7 +1619,7 @@ function App(){
       )}
       <main style={S.main}>
         {tab==="predict"&&<Predict {...props} me={me} setMe={setMe} pins={pins} setPins={setPins} pinScreen={pinScreen} setPinScreen={setPinScreen} saveAll={saveAll} mw={mw} setMw={setMw} draft={draft} setDraft={setDraft} submit={submit} search={search} setSearch={setSearch} setPredictions={setPredictions} setAdmin={setAdmin} isOnline={isOnline} admin={admin} setTab={setTab}/>}
-        {tab==="historicresults"&&<HistoricResults fixtures={effectiveFixtures} displayFixtures={effectiveFixtures} predictions={effectivePredictions} reveals={effectiveReveals} publicReveals={effectivePublicReveals} players={effectivePlayers} jokers={jokers} admin={admin} me={me} demoMode={demoMode} setDemoMode={setDemoMode}/>}
+        {tab==="historicresults"&&<HistoricResults fixtures={effectiveFixtures} displayFixtures={effectiveFixtures} predictions={effectivePredictions} reveals={effectiveReveals} publicReveals={effectivePublicReveals} players={effectivePlayers} jokers={effectiveJokers} admin={admin} me={me} demoMode={demoMode} setDemoMode={setDemoMode}/>}
         {tab==="preds"&&<Results {...props} me={me} admin={admin} expMW={expMW} setExpMW={setExpMW} search={search} setSearch={setSearch} searchMode={searchMode} setSearchMode={setSearchMode} homeQ={homeQ} setHomeQ={setHomeQ} awayQ={awayQ} setAwayQ={setAwayQ}/>}
         {tab==="season"&&<SeasonTab
           players={effectivePlayers} me={me}
@@ -3534,6 +3553,20 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
           <button style={{...S.sb,background:"#1E3A5F",color:"#60A5FA",border:"1px solid #3B82F6",padding:"8px 14px",fontSize:13,fontWeight:700}}
             onClick={onForceRefresh}>
             🔄 Refresh Now
+          </button>
+        </div>
+        <div style={{...S.card,background:"#1A0A00",border:"1px solid #78350F",padding:"12px 16px"}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#F59E0B",marginBottom:4}}>🔧 Rebuild Fixtures</div>
+          <div style={{fontSize:11,color:"#92400E",marginBottom:8}}>Clears saved fixtures and rebuilds from ESPN — redistributes all games into 38 MWs of exactly 10 games each, sorted by date. Also auto-sets Wednesday 7pm deadlines. Only use if MW distribution is wrong.</div>
+          <button style={{...S.sb,background:"#78350F",color:"#FCD34D",border:"1px solid #F59E0B",padding:"8px 14px",fontSize:13,fontWeight:700,width:"100%"}}
+            onClick={async()=>{
+              toast_("🔄 Clearing fixtures and rebuilding from ESPN...");
+              await supa.setState("live_fixtures",{}).catch(()=>{});
+              await supa.setState("deadlines",{}).catch(()=>{});
+              setFixtures({});
+              onForceRefresh();
+            }}>
+            🔧 Rebuild from ESPN (resets to 10 games/MW)
           </button>
         </div>
         <div style={S.card}>
