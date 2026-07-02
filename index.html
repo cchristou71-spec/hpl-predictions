@@ -980,6 +980,7 @@ const half=(mw)=>mw<=19?1:2;
 
 function App(){
   const[tab,setTab]=useState("league");
+  const[demoMode,setDemoMode]=useState(false);
   const[fixtures,setFixtures]=useState(()=>buildFixtures());   // setter needed for live sync & admin edits
   // Compute display fixtures - fixtures grouped by their current (possibly moved) MW
   const[mwOverrides,setMwOverrides]=useState({});
@@ -1489,6 +1490,39 @@ function App(){
   };
 
 
+
+  // Demo mode: inject fake MW1+MW2 data so Results tab can be previewed before season starts
+  const DEMO_PLAYERS = ["Trev","Clive","Andrew","Pete","Steve","Cos","Terry","Alasdair"];
+  const DEMO_FIXTURES = {
+    1: [
+      {id:"d1-0",mw:1,home:"Liverpool",away:"Bournemouth",date:"2026-08-19",time:"20:00",currentDate:"2026-08-19",currentTime:"20:00",result:{homeGoals:4,awayGoals:2}},
+      {id:"d1-1",mw:1,home:"Aston Villa",away:"Newcastle",date:"2026-08-19",time:"20:00",currentDate:"2026-08-19",currentTime:"20:00",result:{homeGoals:0,awayGoals:0}},
+      {id:"d1-2",mw:1,home:"Brighton",away:"Fulham",date:"2026-08-19",time:"20:00",currentDate:"2026-08-19",currentTime:"20:00",result:{homeGoals:1,awayGoals:1}},
+      {id:"d1-3",mw:1,home:"Spurs",away:"Man City",date:"2026-08-19",time:"20:00",currentDate:"2026-08-19",currentTime:"20:00",result:{homeGoals:2,awayGoals:3}},
+      {id:"d1-4",mw:1,home:"Arsenal",away:"Chelsea",date:"2026-08-19",time:"20:00",currentDate:"2026-08-19",currentTime:"20:00",result:{homeGoals:2,awayGoals:1}},
+    ],
+    2: [
+      {id:"d2-0",mw:2,home:"Man City",away:"Arsenal",date:"2026-08-26",time:"20:00",currentDate:"2026-08-26",currentTime:"20:00",result:{homeGoals:1,awayGoals:2}},
+      {id:"d2-1",mw:2,home:"Chelsea",away:"Liverpool",date:"2026-08-26",time:"20:00",currentDate:"2026-08-26",currentTime:"20:00",result:{homeGoals:0,awayGoals:3}},
+      {id:"d2-2",mw:2,home:"Newcastle",away:"Spurs",date:"2026-08-26",time:"20:00",currentDate:"2026-08-26",currentTime:"20:00",result:{homeGoals:2,awayGoals:2}},
+    ]
+  };
+  const DEMO_PREDS = {
+    "Trev":   {"d1-0":{homeGoals:3,awayGoals:1},"d1-1":{homeGoals:1,awayGoals:0},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:2},"d1-4":{homeGoals:2,awayGoals:1},"d2-0":{homeGoals:2,awayGoals:1},"d2-1":{homeGoals:1,awayGoals:2},"d2-2":{homeGoals:1,awayGoals:1}},
+    "Clive":  {"d1-0":{homeGoals:4,awayGoals:2},"d1-1":{homeGoals:0,awayGoals:1},"d1-2":{homeGoals:2,awayGoals:0},"d1-3":{homeGoals:0,awayGoals:2},"d1-4":{homeGoals:1,awayGoals:1},"d2-0":{homeGoals:1,awayGoals:1},"d2-1":{homeGoals:0,awayGoals:2},"d2-2":{homeGoals:2,awayGoals:1}},
+    "Andrew": {"d1-0":{homeGoals:2,awayGoals:1},"d1-1":{homeGoals:0,awayGoals:0},"d1-2":{homeGoals:1,awayGoals:2},"d1-3":{homeGoals:1,awayGoals:3},"d1-4":{homeGoals:3,awayGoals:1},"d2-0":{homeGoals:0,awayGoals:2},"d2-1":{homeGoals:1,awayGoals:3},"d2-2":{homeGoals:1,awayGoals:2}},
+    "Pete":   {"d1-0":{homeGoals:3,awayGoals:2},"d1-1":{homeGoals:1,awayGoals:1},"d1-2":{homeGoals:0,awayGoals:1},"d1-3":{homeGoals:2,awayGoals:2},"d1-4":{homeGoals:2,awayGoals:0},"d2-0":{homeGoals:1,awayGoals:2},"d2-1":{homeGoals:0,awayGoals:1},"d2-2":{homeGoals:2,awayGoals:2}},
+    "Steve":  {"d1-0":{homeGoals:5,awayGoals:1},"d1-1":{homeGoals:2,awayGoals:0},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:2},"d1-4":{homeGoals:2,awayGoals:2},"d2-0":{homeGoals:1,awayGoals:2},"d2-1":{homeGoals:0,awayGoals:3},"d2-2":{homeGoals:1,awayGoals:1}},
+    "Cos":    {"d1-0":{homeGoals:3,awayGoals:1},"d1-1":{homeGoals:0,awayGoals:0},"d1-2":{homeGoals:2,awayGoals:1},"d1-3":{homeGoals:2,awayGoals:3},"d1-4":{homeGoals:2,awayGoals:1},"d2-0":{homeGoals:0,awayGoals:1},"d2-1":{homeGoals:0,awayGoals:2},"d2-2":{homeGoals:2,awayGoals:2}},
+    "Terry":  {"d1-0":{homeGoals:1,awayGoals:1},"d1-1":{homeGoals:1,awayGoals:1},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:1},"d1-4":{homeGoals:1,awayGoals:1},"d2-0":{homeGoals:1,awayGoals:1},"d2-1":{homeGoals:1,awayGoals:1},"d2-2":{homeGoals:1,awayGoals:1}},
+    "Alasdair":{"d1-0":{homeGoals:4,awayGoals:1},"d1-1":{homeGoals:0,awayGoals:2},"d1-2":{homeGoals:1,awayGoals:0},"d1-3":{homeGoals:1,awayGoals:2},"d1-4":{homeGoals:3,awayGoals:0},"d2-0":{homeGoals:1,awayGoals:2},"d2-1":{homeGoals:0,awayGoals:4},"d2-2":{homeGoals:2,awayGoals:2}},
+  };
+  const effectiveFixtures = demoMode ? DEMO_FIXTURES : displayFixtures;
+  const effectivePredictions = demoMode ? DEMO_PREDS : predictions;
+  const effectiveReveals = demoMode ? {1:true,2:true} : reveals;
+  const effectivePublicReveals = demoMode ? {1:true,2:true} : publicReveals;
+  const effectivePlayers = demoMode ? DEMO_PLAYERS : players;
+
   const props={fixtures,displayFixtures,predictions,reveals,publicReveals,deadlines,players,jokers,isPast,jokersUsed,hasJoker,canJoker};
 
   return(
@@ -1549,7 +1583,7 @@ function App(){
       )}
       <main style={S.main}>
         {tab==="predict"&&<Predict {...props} me={me} setMe={setMe} pins={pins} setPins={setPins} pinScreen={pinScreen} setPinScreen={setPinScreen} saveAll={saveAll} mw={mw} setMw={setMw} draft={draft} setDraft={setDraft} submit={submit} search={search} setSearch={setSearch} setPredictions={setPredictions} setAdmin={setAdmin} isOnline={isOnline} admin={admin} setTab={setTab}/>}
-        {tab==="historicresults"&&<HistoricResults fixtures={fixtures} displayFixtures={displayFixtures} predictions={predictions} reveals={reveals} publicReveals={publicReveals} players={players} jokers={jokers} admin={admin} me={me}/>}
+        {tab==="historicresults"&&<HistoricResults fixtures={effectiveFixtures} displayFixtures={effectiveFixtures} predictions={effectivePredictions} reveals={effectiveReveals} publicReveals={effectivePublicReveals} players={effectivePlayers} jokers={jokers} admin={admin} me={me} demoMode={demoMode} setDemoMode={setDemoMode}/>}
         {tab==="preds"&&<Results {...props} me={me} admin={admin} expMW={expMW} setExpMW={setExpMW} search={search} setSearch={setSearch} searchMode={searchMode} setSearchMode={setSearchMode} homeQ={homeQ} setHomeQ={setHomeQ} awayQ={awayQ} setAwayQ={setAwayQ}/>}
         {tab==="season"&&<SeasonTab
           players={players} me={me}
@@ -2076,7 +2110,7 @@ function Predict({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
 
 
 
-function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicReveals,players,jokers,admin,me}){
+function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicReveals,players,jokers,admin,me,demoMode,setDemoMode}){
   const df=displayFixtures||fixtures;
   const allMWs=Object.keys(df).map(Number).sort((a,b)=>a-b);
   // Only show MWs that are revealed (admin sees all revealed, others see only public)
@@ -2087,8 +2121,15 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
 
   if(visibleMWs.length===0){
     return(
-      <div style={{padding:24,textAlign:"center",color:"#64748B",fontSize:14}}>
-        No match weeks revealed yet.
+      <div style={{padding:24,textAlign:"center"}}>
+        {setDemoMode&&(
+          <button onClick={()=>setDemoMode(true)}
+            style={{background:"#7C3AED",color:"#fff",border:"none",borderRadius:8,
+              padding:"10px 20px",fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:16,display:"block",margin:"0 auto 12px"}}>
+            🎭 Preview with demo data
+          </button>
+        )}
+        <div style={{color:"#64748B",fontSize:14}}>No match weeks revealed yet.</div>
       </div>
     );
   }
@@ -2132,6 +2173,18 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
   const colW=70;
 
   return(
+    <>
+      {demoMode&&setDemoMode&&(
+        <div style={{background:"#7C3AED22",border:"1px solid #7C3AED",borderRadius:8,
+          margin:"12px 16px 0",padding:"8px 14px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <span style={{fontSize:12,color:"#A78BFA",fontWeight:600}}>🎭 Demo mode — showing fake data for preview purposes</span>
+          <button onClick={()=>setDemoMode(false)}
+            style={{background:"#7C3AED",color:"#fff",border:"none",borderRadius:6,
+              padding:"4px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            Exit demo
+          </button>
+        </div>
+      )}
     <div style={{padding:"12px 0 80px",overflowX:"auto"}}>
       {visibleMWs.map(w=>{
         const fxs=(df[w]||[]).sort((a,b)=>new Date(a.currentDate||a.date)-new Date(b.currentDate||b.date));
@@ -2245,6 +2298,7 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
         );
       })}
     </div>
+    </>
   );
 }
 
