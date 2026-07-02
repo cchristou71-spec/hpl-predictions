@@ -2113,7 +2113,7 @@ function Predict({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
 function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicReveals,players,jokers,admin,me,demoMode,setDemoMode}){
   const df=displayFixtures||fixtures;
   // Show ALL match weeks — past (revealed) with predictions, future with fixtures only
-  const allMWs=Object.keys(df).map(Number).filter(w=>(df[w]||[]).length>0).sort((a,b)=>a-b);
+  const allMWs=Object.keys(df).map(Number).filter(w=>w>=1&&w<=38&&(df[w]||[]).length>0).sort((a,b)=>a-b);
   const isRevealed=(w)=>admin?reveals[w]===true:publicReveals[w]===true;
 
   if(allMWs.length===0){
@@ -2224,13 +2224,19 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
               /* Future MW — show fixture list only */
               <div style={{padding:"8px 0"}}>
                 {fxs.map((fx,i)=>(
-                  <div key={fx.id} style={{display:"flex",alignItems:"center",gap:8,
+                  <div key={fx.id} style={{display:"flex",alignItems:"center",
                     padding:"6px 16px",borderBottom:"1px solid #0F172A",
                     background:i%2===0?"#1E293B11":"transparent"}}>
                     <span style={{fontSize:11,color:"#475569",width:70,flexShrink:0}}>{fmtDate(fx.currentDate||fx.date)}</span>
-                    <span style={{fontSize:12,color:"#E2E8F0",fontWeight:500}}>{fx.home}</span>
-                    <span style={{fontSize:11,color:"#475569",margin:"0 4px"}}>v</span>
-                    <span style={{fontSize:12,color:"#E2E8F0",fontWeight:500}}>{fx.away}</span>
+                    <span style={{flex:1,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:5}}>
+                      <span style={{fontSize:12,color:"#E2E8F0",fontWeight:500}}>{fx.home}</span>
+                      <Badge team={fx.home} size={18}/>
+                    </span>
+                    <span style={{fontSize:11,color:"#475569",width:24,textAlign:"center",flexShrink:0}}>v</span>
+                    <span style={{flex:1,display:"flex",alignItems:"center",justifyContent:"flex-start",gap:5}}>
+                      <Badge team={fx.away} size={18}/>
+                      <span style={{fontSize:12,color:"#E2E8F0",fontWeight:500}}>{fx.away}</span>
+                    </span>
                   </div>
                 ))}
               </div>
