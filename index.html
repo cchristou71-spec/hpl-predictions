@@ -504,17 +504,32 @@ async function liveRefresh(fixtures, mwOverrides) {
           date: evDate, time: evTime, currentDate: evDate, currentTime: evTime, result: e.result });
       });
 
-      // Auto-set deadlines: Wednesday 19:00 before the first game of each MW
+      // Auto-set deadlines: Wednesday 20:00 (8pm) before the first game of each MW.
+      // Rule: find the Wednesday of the same week as the first game (week = Mon-Sun).
+      // If the first game falls Mon or Tue (before Wednesday), use the previous Wednesday.
+      // This matches the pub night rule — deadline is always Wed 8pm before that week's games.
       const autoDeadlines = {};
-      Object.entries(built).forEach(([mwStr, fxs]) => {
-        const mwNum = parseInt(mwStr);
+      const mwNums = Object.keys(built).map(Number).sort((a,b)=>a-b);
+      const usedDeadlines = new Set();
+      mwNums.forEach(mwNum => {
+        const fxs = built[mwNum];
         const firstDate = fxs.reduce((min, fx) => fx.date < min ? fx.date : min, fxs[0].date);
         const d = new Date(firstDate + "T12:00:00");
-        // Find the Wednesday before (or on) the first game
-        const day = d.getDay(); // 0=Sun,1=Mon,...,3=Wed,...,6=Sat
-        const daysBack = day >= 3 ? day - 3 : day + 4; // days back to Wednesday
+        const day = d.getDay(); // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
+        // Find the Wednesday before the first game of this MW.
+        // PL weeks run Fri/Sat/Sun, so we want the Wed immediately preceding:
+        // Wed(3)→0, Thu(4)→1, Fri(5)→2, Sat(6)→3, Sun(0)→4, Mon(1)→5, Tue(2)→6
+        // Mon and Tue are unusual (e.g. midweek fixtures) — use previous Wed
+        const daysBack = ((day + 4) % 7);  // rotates: Wed=0,Thu=1,Fri=2,Sat=3,Sun=4,Mon=5,Tue=6
         d.setDate(d.getDate() - daysBack);
-        autoDeadlines[mwNum] = `${d.toLocaleDateString("en-CA")}T19:00`;
+        let deadline = `${d.toLocaleDateString("en-CA")}T20:00`;
+        // Safety: if two MWs land on same Wednesday, push second one back one week
+        while (usedDeadlines.has(deadline)) {
+          d.setDate(d.getDate() - 7);
+          deadline = `${d.toLocaleDateString("en-CA")}T20:00`;
+        }
+        usedDeadlines.add(deadline);
+        autoDeadlines[mwNum] = deadline;
       });
 
       if (Object.keys(built).length > 0) {
@@ -1527,13 +1542,15 @@ function App(){
     ]
   };
   const DEMO_PREDS = {
-    "Trev":   {"d1-0":{homeGoals:3,awayGoals:1},"d1-1":{homeGoals:1,awayGoals:0},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:2},"d1-4":{homeGoals:2,awayGoals:1},"d2-0":{homeGoals:2,awayGoals:1},"d2-1":{homeGoals:1,awayGoals:2},"d2-2":{homeGoals:1,awayGoals:1}},
-    "Clive":  {"d1-0":{homeGoals:4,awayGoals:2},"d1-1":{homeGoals:0,awayGoals:1},"d1-2":{homeGoals:2,awayGoals:0},"d1-3":{homeGoals:0,awayGoals:2},"d1-4":{homeGoals:1,awayGoals:1},"d2-0":{homeGoals:1,awayGoals:1},"d2-1":{homeGoals:0,awayGoals:2},"d2-2":{homeGoals:2,awayGoals:1}},
-    "Andrew": {"d1-0":{homeGoals:2,awayGoals:1},"d1-1":{homeGoals:0,awayGoals:0},"d1-2":{homeGoals:1,awayGoals:2},"d1-3":{homeGoals:1,awayGoals:3},"d1-4":{homeGoals:3,awayGoals:1},"d2-0":{homeGoals:0,awayGoals:2},"d2-1":{homeGoals:1,awayGoals:3},"d2-2":{homeGoals:1,awayGoals:2}},
-    "Pete":   {"d1-0":{homeGoals:3,awayGoals:2},"d1-1":{homeGoals:1,awayGoals:1},"d1-2":{homeGoals:0,awayGoals:1},"d1-3":{homeGoals:2,awayGoals:2},"d1-4":{homeGoals:2,awayGoals:0},"d2-0":{homeGoals:1,awayGoals:2},"d2-1":{homeGoals:0,awayGoals:1},"d2-2":{homeGoals:2,awayGoals:2}},
-    "Steve":  {"d1-0":{homeGoals:5,awayGoals:1},"d1-1":{homeGoals:2,awayGoals:0},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:2},"d1-4":{homeGoals:2,awayGoals:2},"d2-0":{homeGoals:1,awayGoals:2},"d2-1":{homeGoals:0,awayGoals:3},"d2-2":{homeGoals:1,awayGoals:1}},
-    "Cos":    {"d1-0":{homeGoals:3,awayGoals:1},"d1-1":{homeGoals:0,awayGoals:0},"d1-2":{homeGoals:2,awayGoals:1},"d1-3":{homeGoals:2,awayGoals:3},"d1-4":{homeGoals:2,awayGoals:1},"d2-0":{homeGoals:0,awayGoals:1},"d2-1":{homeGoals:0,awayGoals:2},"d2-2":{homeGoals:2,awayGoals:2}},
-    "Terry":  {"d1-0":{homeGoals:1,awayGoals:1},"d1-1":{homeGoals:1,awayGoals:1},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:1},"d1-4":{homeGoals:1,awayGoals:1},"d2-0":{homeGoals:1,awayGoals:1},"d2-1":{homeGoals:1,awayGoals:1},"d2-2":{homeGoals:1,awayGoals:1}},
+    // Cos plays joker on d1-4 (Arsenal v Chelsea) in MW1 — joker:true on that fixture
+    // Trev plays joker on d2-0 (Man City v Arsenal) in MW2 — joker:true on that fixture
+    "Trev":    {"d1-0":{homeGoals:3,awayGoals:1},"d1-1":{homeGoals:1,awayGoals:0},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:2},"d1-4":{homeGoals:2,awayGoals:1},"d2-0":{homeGoals:2,awayGoals:1,joker:true},"d2-1":{homeGoals:1,awayGoals:2},"d2-2":{homeGoals:1,awayGoals:1}},
+    "Clive":   {"d1-0":{homeGoals:4,awayGoals:2},"d1-1":{homeGoals:0,awayGoals:1},"d1-2":{homeGoals:2,awayGoals:0},"d1-3":{homeGoals:0,awayGoals:2},"d1-4":{homeGoals:1,awayGoals:1},"d2-0":{homeGoals:1,awayGoals:1},"d2-1":{homeGoals:0,awayGoals:2},"d2-2":{homeGoals:2,awayGoals:1}},
+    "Andrew":  {"d1-0":{homeGoals:2,awayGoals:1},"d1-1":{homeGoals:0,awayGoals:0},"d1-2":{homeGoals:1,awayGoals:2},"d1-3":{homeGoals:1,awayGoals:3},"d1-4":{homeGoals:3,awayGoals:1},"d2-0":{homeGoals:0,awayGoals:2},"d2-1":{homeGoals:1,awayGoals:3},"d2-2":{homeGoals:1,awayGoals:2}},
+    "Pete":    {"d1-0":{homeGoals:3,awayGoals:2},"d1-1":{homeGoals:1,awayGoals:1},"d1-2":{homeGoals:0,awayGoals:1},"d1-3":{homeGoals:2,awayGoals:2},"d1-4":{homeGoals:2,awayGoals:0},"d2-0":{homeGoals:1,awayGoals:2},"d2-1":{homeGoals:0,awayGoals:1},"d2-2":{homeGoals:2,awayGoals:2}},
+    "Steve":   {"d1-0":{homeGoals:5,awayGoals:1},"d1-1":{homeGoals:2,awayGoals:0},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:2},"d1-4":{homeGoals:2,awayGoals:2},"d2-0":{homeGoals:1,awayGoals:2},"d2-1":{homeGoals:0,awayGoals:3},"d2-2":{homeGoals:1,awayGoals:1}},
+    "Cos":     {"d1-0":{homeGoals:3,awayGoals:1},"d1-1":{homeGoals:0,awayGoals:0},"d1-2":{homeGoals:2,awayGoals:1},"d1-3":{homeGoals:2,awayGoals:3},"d1-4":{homeGoals:2,awayGoals:1,joker:true},"d2-0":{homeGoals:0,awayGoals:1},"d2-1":{homeGoals:0,awayGoals:2},"d2-2":{homeGoals:2,awayGoals:2}},
+    "Terry":   {"d1-0":{homeGoals:1,awayGoals:1},"d1-1":{homeGoals:1,awayGoals:1},"d1-2":{homeGoals:1,awayGoals:1},"d1-3":{homeGoals:1,awayGoals:1},"d1-4":{homeGoals:1,awayGoals:1},"d2-0":{homeGoals:1,awayGoals:1},"d2-1":{homeGoals:1,awayGoals:1},"d2-2":{homeGoals:1,awayGoals:1}},
     "Alasdair":{"d1-0":{homeGoals:4,awayGoals:1},"d1-1":{homeGoals:0,awayGoals:2},"d1-2":{homeGoals:1,awayGoals:0},"d1-3":{homeGoals:1,awayGoals:2},"d1-4":{homeGoals:3,awayGoals:0},"d2-0":{homeGoals:1,awayGoals:2},"d2-1":{homeGoals:0,awayGoals:4},"d2-2":{homeGoals:2,awayGoals:2}},
   };
   // Demo jokers: Cos plays joker in MW1, Trev in MW2
@@ -2030,7 +2047,7 @@ function Predict({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
                 const day=earliest.getDay();
                 const wed=new Date(earliest);
                 wed.setDate(earliest.getDate()-(day>=3?day-3:day+4));
-                wed.setHours(18,0,0,0); // 18:00 UTC = 19:00 BST
+                wed.setHours(20,0,0,0); // 20:00 local = 8pm
                 const sugStr=wed.toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Europe/London"})+" BST";
                 return <span style={{color:"#64748B",fontSize:14}}>{sugStr} <span style={{fontSize:11,color:"#475569"}}>(suggested — not yet set)</span></span>;
               })()}
@@ -3634,7 +3651,7 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
                 wed.setDate(earliest.getDate()-daysToWed);
                 wed.setHours(18,0,0,0);
                 const suggestedISO=wed.toISOString().slice(0,16);
-                const suggestedDisplay=wed.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})+" 19:00 BST";
+                const suggestedDisplay=wed.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})+" 20:00";
                 return(
                   <button style={{...S.sb,marginBottom:6,fontSize:12,color:"#F59E0B",border:"1px solid #F59E0B44",display:"block",width:"100%"}}
                     onClick={()=>{
