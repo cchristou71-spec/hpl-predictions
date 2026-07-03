@@ -3421,6 +3421,9 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
   const[newPw2,setNewPw2]=useState('');
   const[managingAdmins,setManagingAdmins]=useState(false);
   const[newAdminPw,setNewAdminPw]=useState('');
+  const[changingMaster,setChangingMaster]=useState(false);
+  const[newMasterPw,setNewMasterPw]=useState('');
+  const[confirmMasterPw,setConfirmMasterPw]=useState('');
 
   // Multi-admin: passwords stored as JSON array in localStorage
   const getAdminPws=()=>{
@@ -3519,6 +3522,47 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
             ))}
           </div>
 
+          {/* Change master password */}
+          {!changingMaster ? (
+            <button onClick={()=>setChangingMaster(true)}
+              style={{...S.sb,fontSize:12,marginBottom:12,color:"#F59E0B",border:"1px solid #F59E0B44"}}>
+              🔄 Change Master Password
+            </button>
+          ) : (
+            <div style={{background:"#0F172A",borderRadius:8,padding:12,marginBottom:12,border:"1px solid #F59E0B44"}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#F59E0B",marginBottom:10}}>🔄 Change Master Password</div>
+              <div style={{fontSize:11,color:"#64748B",marginBottom:8}}>Enter a new master password twice to confirm.</div>
+              <input type="text" placeholder="New master password" value={newMasterPw} autoComplete="off"
+                onChange={e=>setNewMasterPw(e.target.value)}
+                style={{display:"block",width:"100%",boxSizing:"border-box",padding:"10px 12px",
+                  marginBottom:8,fontSize:14,borderRadius:8,border:"1px solid #334155",
+                  background:"#1E293B",color:"#E2E8F0",outline:"none"}}/>
+              <input type="text" placeholder="Confirm new master password" value={confirmMasterPw} autoComplete="off"
+                onChange={e=>setConfirmMasterPw(e.target.value)}
+                style={{display:"block",width:"100%",boxSizing:"border-box",padding:"10px 12px",
+                  marginBottom:10,fontSize:14,borderRadius:8,border:"1px solid #334155",
+                  background:"#1E293B",color:"#E2E8F0",outline:"none"}}/>
+              <div style={{display:"flex",gap:8}}>
+                <button style={{...S.sb,flex:1}} onClick={()=>{setChangingMaster(false);setNewMasterPw('');setConfirmMasterPw('');}}>
+                  Cancel
+                </button>
+                <button style={{...S.bb,flex:1}} onClick={()=>{
+                  if(!newMasterPw.trim()){toast_("Enter a new password","error");return;}
+                  if(newMasterPw!==confirmMasterPw){toast_("Passwords don't match","error");return;}
+                  if(newMasterPw.length<4){toast_("Password must be at least 4 characters","error");return;}
+                  // Replace master (index 0) with new password, keep temp passwords
+                  const pws=[newMasterPw.trim(),...getAdminPws().slice(1)];
+                  try{localStorage.setItem('hpl_adminpws',JSON.stringify(pws));}catch{toast_("Save failed","error");return;}
+                  toast_("✅ Master password changed — use your new password next time you log in");
+                  setChangingMaster(false);setNewMasterPw('');setConfirmMasterPw('');
+                  setManagingAdmins(false);setTimeout(()=>setManagingAdmins(true),50);
+                }}>
+                  Save New Password
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Temporary passwords */}
           <div style={{borderTop:"1px solid #334155",paddingTop:14,marginBottom:12}}>
             <div style={{fontSize:12,fontWeight:700,color:"#94A3B8",marginBottom:6}}>
@@ -3553,10 +3597,13 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
             <div style={{fontSize:12,color:"#64748B",marginBottom:6,marginTop:10}}>
               Add temporary password:
             </div>
+            <input type="text" placeholder="Enter temporary password" value={newAdminPw} autoComplete="off"
+              onChange={e=>setNewAdminPw(e.target.value)}
+              style={{display:"block",width:"100%",boxSizing:"border-box",padding:"10px 12px",
+                marginBottom:8,fontSize:14,borderRadius:8,border:"1px solid #334155",
+                background:"#0F172A",color:"#E2E8F0",outline:"none"}}/>
             <div style={{display:"flex",gap:8,marginBottom:8}}>
-              <input type="text" placeholder="Enter temporary password" value={newAdminPw} autoComplete="off"
-                onChange={e=>setNewAdminPw(e.target.value)} style={{...S.inp,marginBottom:0,flex:1}}/>
-              <button style={S.bb} onClick={()=>{
+              <button style={{...S.bb,flex:1}} onClick={()=>{
                 if(!newAdminPw.trim()){toast_("Enter a password","error");return;}
                 const pws=[...getAdminPws(),newAdminPw.trim()];
                 try{localStorage.setItem('hpl_adminpws',JSON.stringify(pws));}catch{toast_("Save failed","error");return;}
