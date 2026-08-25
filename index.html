@@ -175,9 +175,9 @@ function rowsToPredictions(predRows) {
 
 // The "current" match week — the first one whose deadline hasn't passed yet (or, if
 // no deadline has been set for it, treated as still open). Once a week's deadline
-// passes, this naturally advances to the next one. Shared by the Predict tab (which
-// match week to open by default) and the Results tab (which week to land on by
-// default) so they move forward together as the season progresses.
+// passes, this naturally advances to the next one. Used for the *doing* pages —
+// Predict (which week to open for entering picks) and Admin (which week to manage)
+// — where there's nothing left to do for a week the moment its deadline passes.
 function computeCurrentMW(deadlines, fixturesObj) {
   const mws = Object.keys(fixturesObj||{}).map(Number)
     .filter(w=>fixturesObj[w]&&fixturesObj[w].length>0)
@@ -191,6 +191,30 @@ function computeCurrentMW(deadlines, fixturesObj) {
     if (isNaN(d.getTime()) || now < d) return w; // deadline hasn't passed
   }
   return mws[mws.length-1]; // every deadline has passed — stay on the last week
+}
+
+// The match week to land on for *reviewing* — Results and Detailed Results. Unlike
+// computeCurrentMW, this deliberately stays on a week through its whole "live" spell
+// (reveal, games being played, results coming in) rather than jumping the moment its
+// own deadline passes — that's before its games have even kicked off. It only
+// advances once the *next* week's deadline has also passed, by which point the
+// previous week's results are realistically done.
+function computeReviewMW(deadlines, fixturesObj) {
+  const mws = Object.keys(fixturesObj||{}).map(Number)
+    .filter(w=>fixturesObj[w]&&fixturesObj[w].length>0)
+    .sort((a,b)=>a-b);
+  if(!mws.length) return 1;
+  const now = new Date();
+  let lastPassed = null;
+  for (const w of mws) {
+    const dl = deadlines[w];
+    if (dl) {
+      const d = new Date(dl);
+      if (!isNaN(d.getTime()) && now >= d) { lastPassed = w; continue; }
+    }
+    break; // first week whose deadline hasn't passed (or isn't set) — stop here
+  }
+  return lastPassed || mws[0]; // nothing locked in yet — default to the very first week
 }
 
 // Load all shared state from Supabase
@@ -2140,7 +2164,7 @@ function App(){
       )}
       <main style={S.main}>
         {tab==="predict"&&<Predict {...props} predSavedAt={predSavedAt} me={me} setMe={setMe} pins={pins} setPins={setPins} pinScreen={pinScreen} setPinScreen={setPinScreen} saveAll={saveAll} mw={mw} setMw={setMw} draft={draft} setDraft={setDraft} submit={submit} search={search} setSearch={setSearch} setPredictions={setPredictions} setAdmin={setAdmin} isOnline={isOnline} admin={admin} setTab={setTab} toast_={toast_} saveLocalBackup={saveLocalBackup} confirmLocalBackups={confirmLocalBackups} setPendingBackups={setPendingBackups} getPendingBackups={getPendingBackups}/>}
-        {tab==="historicresults"&&<HistoricResults fixtures={effectiveFixtures} displayFixtures={effectiveFixtures} predictions={effectivePredictions} reveals={effectiveReveals} publicReveals={effectivePublicReveals} players={effectivePlayers} jokers={effectiveJokers} admin={admin} me={me} demoMode={demoMode} setDemoMode={setDemoMode}/>}
+        {tab==="historicresults"&&<HistoricResults fixtures={effectiveFixtures} displayFixtures={effectiveFixtures} predictions={effectivePredictions} reveals={effectiveReveals} publicReveals={effectivePublicReveals} deadlines={deadlines} players={effectivePlayers} jokers={effectiveJokers} admin={admin} me={me} demoMode={demoMode} setDemoMode={setDemoMode}/>}
         {tab==="preds"&&<Results {...props} me={me} admin={admin} expMW={expMW} setExpMW={setExpMW} search={search} setSearch={setSearch} searchMode={searchMode} setSearchMode={setSearchMode} homeQ={homeQ} setHomeQ={setHomeQ} awayQ={awayQ} setAwayQ={setAwayQ}/>}
         {tab==="season"&&<SeasonTab
           players={effectivePlayers} me={me}
@@ -2965,7 +2989,7 @@ function Predict({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
 
 
 
-function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicReveals,players,jokers,admin,me,demoMode,setDemoMode}){
+function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicReveals,deadlines,players,jokers,admin,me,demoMode,setDemoMode}){
   const df=displayFixtures||fixtures;
   const [formTeam,setFormTeam]=React.useState("");
   const [formOpen,setFormOpen]=React.useState(false);
@@ -2973,13 +2997,21 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
   const allMWs=Object.keys(df).map(Number).filter(w=>w>=1&&w<=38&&(df[w]||[]).length>0).sort((a,b)=>a-b);
   const isRevealed=(w)=>admin?reveals[w]===true:publicReveals[w]===true;
 
-  // Auto-expand: find the current active MW (last revealed, or first upcoming if none revealed)
-  const defaultMW = React.useMemo(()=>{
-    const revealedMWList=allMWs.filter(w=>isRevealed(w));
-    if(revealedMWList.length) return revealedMWList[revealedMWList.length-1]; // last revealed
-    return allMWs[0]||null; // first upcoming
-  },[allMWs.join(',')]);
-  const[expandedMW,setExpandedMW]=React.useState(()=>defaultMW);
+  // The week to review by default — same rule as the Results tab (see
+  // computeReviewMW at top of file): stays on a week through its "live" spell
+  // (reveal, games playing, results coming in) rather than jumping the moment its
+  // own deadline passes; only advances once the *next* week's deadline has passed
+  // too, by which point the previous week is realistically done and dusted.
+  const defaultMW = computeReviewMW(deadlines||{}, df);
+  const[expandedMW,setExpandedMW]=React.useState(null);
+  // Correct once real deadline data is available — matters if this tab happens to
+  // mount before Supabase's deadlines have loaded. Only applies when nothing else
+  // has set expandedMW yet; never overrides a manual tap to a different week.
+  useEffect(()=>{
+    if(expandedMW===null && defaultMW){
+      setExpandedMW(defaultMW);
+    }
+  },[defaultMW]);
   const mwRefs=React.useRef({});
   const jumpToMW=(w)=>{
     setExpandedMW(w);
@@ -3509,33 +3541,35 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
     }).sort((a,b)=>a.displayMW-b.displayMW);
   },[allFx,homeQ,awayQ]);
 
-  // "Current" match week per deadlines — the first week whose deadline hasn't passed
-  // (see computeCurrentMW at top of file). Once MW1's deadline passes, this becomes
-  // MW2, and so on, so the page below tracks forward with the season automatically.
-  const nowOpenMW = computeCurrentMW(deadlines||{}, displayFixtures||fixtures);
+  // The week to review by default — stays on a week through its whole "live" spell
+  // (reveal, games playing out, results coming in) rather than jumping the moment
+  // its own deadline passes; only advances once the *next* week's deadline has also
+  // passed (see computeReviewMW at top of file). E.g. once MW1's deadline passes its
+  // games haven't even kicked off yet, so this page rightly stays on MW1 — it only
+  // moves to MW2 once MW2's deadline has passed too, by which point MW1 is done.
+  const reviewMW = computeReviewMW(deadlines||{}, displayFixtures||fixtures);
 
   // Show MWs that have results OR player has predictions OR are revealed OR are the
-  // current open week (even with nothing in it yet) — that last part is what lets
-  // the page actually land on/navigate to the new current week the moment the
-  // previous one's deadline passes, rather than only once something's in it.
+  // week under review (even with nothing in it yet) — that last part is what lets
+  // the page actually land on/navigate to the new review week the moment it changes,
+  // rather than only once something's in it.
   const allMWs = Array.from({length:(Object.keys(displayFixtures||fixtures).length===0?0:Math.max(...Object.keys(displayFixtures||fixtures).map(Number)))},(_,i)=>i+1)
     .filter(w => {
       const mwFxList = (displayFixtures||fixtures)[w] || [];
       const hasResult = mwFxList.some(fx => fx.result);
       const myPreds = me && Object.keys(predictions[me]||{}).some(id=>id.startsWith(`${w}-`));
-      return hasResult || myPreds || reveals[w] || publicReveals[w] || w===nowOpenMW;
+      return hasResult || myPreds || reveals[w] || publicReveals[w] || w===reviewMW;
     })
     .sort((a,b)=>b-a);
 
-  // Default to the current open week once its deadline has taken effect, so this
-  // page moves forward with the season instead of staying parked on the last one.
-  // Only applies when nothing else has already set expMW — a deep link's ?mw=N or a
-  // manual tap always takes priority, and this only ever fires the first time.
+  // Default to the week under review. Only applies when nothing else has already
+  // set expMW — a deep link's ?mw=N or a manual tap always takes priority, and this
+  // only ever fires the first time.
   useEffect(()=>{
-    if(expMW===null && nowOpenMW){
-      setExpMW(nowOpenMW);
+    if(expMW===null && reviewMW){
+      setExpMW(reviewMW);
     }
-  },[nowOpenMW]);
+  },[reviewMW]);
 
   const printMW = (w) => {
     const fxList = (displayFixtures||fixtures)[w] || [];
@@ -6456,22 +6490,68 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
   const [dragIdx, setDragIdx] = useState(null);
   const [dragOver, setDragOver] = useState(null);
   const [submitted, setSubmitted] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState(null); // when the in-progress order was last autosaved
+  const [draftSaving, setDraftSaving] = useState(false);
   const myPred = seasonPreds?.[me] || null;
   const touchDragRef = useRef(null);
+  const hasInteracted = useRef(false); // only start autosaving once they've actually dragged something
+  const draftSaveTimer = useRef(null);
 
+  // On login (or switching players): if already submitted, restore that final order
+  // (unchangeable). Otherwise, try to load any saved in-progress draft for this
+  // player — so reordering can be picked up again later, even days later or on a
+  // different device — falling back to the default A-Z list if there isn't one yet.
   useEffect(() => {
+    hasInteracted.current = false;
     if (myPred && myPred.length === 20) {
       setSubmitted(true);
-      setDraft([...myPred]); // restore saved order
-    } else if (!myPred) {
-      setSubmitted(false);
-      setDraft([...PL_TEAMS_2526].sort());
+      setDraft([...myPred]); // restore saved (submitted) order
+      return;
     }
+    setSubmitted(false);
+    if (!me) { setDraft([...PL_TEAMS_2526].sort()); return; }
+    let cancelled = false;
+    supa.getState("season_preds_draft").then(all => {
+      if (cancelled) return;
+      const mine = all && all[me];
+      if (mine && mine.length === 20) {
+        setDraft([...mine]);
+        setDraftSavedAt(new Date()); // it was already saved previously, just not just now
+      } else {
+        setDraft([...PL_TEAMS_2526].sort());
+      }
+    }).catch(() => {
+      if (!cancelled) setDraft([...PL_TEAMS_2526].sort());
+    });
+    return () => { cancelled = true; };
   }, [me, myPred]);
+
+  // Autosave the draft ordering (debounced) whenever it changes — so refining the
+  // order over several sittings never loses progress. Never runs before submission
+  // is locked in, and only once the player has actually touched the list (avoids
+  // pointlessly re-saving the same thing right after it was just loaded above).
+  useEffect(() => {
+    if (!me || submitted || !hasInteracted.current) return;
+    setDraftSaving(true);
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(() => {
+      supa.getState("season_preds_draft").then(all => {
+        const merged = { ...(all || {}), [me]: draft };
+        return supa.setState("season_preds_draft", merged);
+      }).then(() => {
+        setDraftSavedAt(new Date());
+        setDraftSaving(false);
+      }).catch(() => {
+        setDraftSaving(false); // best-effort — a failed autosave isn't shown as an error, it'll just retry on the next change
+      });
+    }, 1200);
+    return () => { if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current); };
+  }, [draft, me, submitted]);
 
   // Move a team from index 'from' to index 'to'
   const moveTo = (from, to) => {
     if (from === to) return;
+    hasInteracted.current = true;
     const d = [...draft];
     const [item] = d.splice(from, 1);
     d.splice(to, 0, item);
@@ -6512,7 +6592,10 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
     if (!me) { toast_("Please log in first","error"); return; }
     if (submitted) return;
     if (positionsLocked) { toast_("Position Predictions closed on "+new Date(positionDeadline).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}),"error"); return; }
-    if (!window.confirm("Submit your league prediction? This cannot be changed once submitted.")) return;
+    // Final review — show the full ranked list right in the confirmation itself,
+    // so this doubles as a last look before it's locked in for good.
+    const reviewText = draft.map((team,i)=>`${i+1}. ${team}`).join("\n");
+    if (!window.confirm(`Submit your league prediction? This cannot be changed once submitted.\n\n${reviewText}`)) return;
     const newPreds = {...(seasonPreds||{}), [me]: draft};
     setSeasonPreds(newPreds);
     setSubmitted(true);
@@ -6527,6 +6610,15 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
     } catch(e) {
       toast_("Saved locally — sync to server failed. Will retry next open.","error");
     }
+    // Clean up the now-redundant draft — the submitted prediction is the record now.
+    try {
+      const all = await supa.getState("season_preds_draft");
+      if (all && all[me]) {
+        const rest = {...all};
+        delete rest[me];
+        await supa.setState("season_preds_draft", rest);
+      }
+    } catch {}
   };
 
   // Scores if actual table is set
@@ -6841,10 +6933,16 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
         ) : (
           <div style={S.card}>
             <div style={{...S.ct,marginBottom:4}}>📝 Set Your Prediction</div>
-            <div style={{fontSize:12,color:"#64748B",marginBottom:12}}>
-              Drag teams up or down to rank them 1st to 20th. Once submitted it cannot be changed.
+            <div style={{fontSize:12,color:"#64748B",marginBottom:6}}>
+              Drag teams up or down to rank them 1st to 20th. Your order is saved automatically as you go —
+              come back and refine it anytime before submitting. Once submitted it cannot be changed.
               Closes {new Date(positionDeadline).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}.
             </div>
+            {(draftSaving || draftSavedAt) && (
+              <div style={{fontSize:11,color:draftSaving?"#F59E0B":"#34D399",marginBottom:10,display:"flex",alignItems:"center",gap:5}}>
+                {draftSaving ? "💾 Saving…" : `✓ Draft saved ${draftSavedAt.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}`}
+              </div>
+            )}
             {draft.map((t,i) => (
               <div
                 key={t}
