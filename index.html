@@ -6487,14 +6487,12 @@ function SeasonAdminPanel({seasonActual, setSeasonActual, seasonPts, setSeasonPt
 function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seasonPts, seasonGP, saveAll, toast_, setTab, seasonLabel, leagueRevealed, positionDeadline}) {
   const positionsLocked = positionDeadline && new Date(positionDeadline) <= new Date();
   const [draft, setDraft] = useState([...PL_TEAMS_2526].sort());
-  const [dragIdx, setDragIdx] = useState(null);
-  const [dragOver, setDragOver] = useState(null);
   const [submitted, setSubmitted] = useState(false);
   const [draftSavedAt, setDraftSavedAt] = useState(null); // when the in-progress order was last autosaved
   const [draftSaving, setDraftSaving] = useState(false);
+  const [justSwapped, setJustSwapped] = useState(null); // {a,b} indices — brief highlight after a swap
   const myPred = seasonPreds?.[me] || null;
-  const touchDragRef = useRef(null);
-  const hasInteracted = useRef(false); // only start autosaving once they've actually dragged something
+  const hasInteracted = useRef(false); // only start autosaving once they've actually changed something
   const draftSaveTimer = useRef(null);
 
   // On login (or switching players): if already submitted, restore that final order
@@ -6548,44 +6546,22 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
     return () => { if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current); };
   }, [draft, me, submitted]);
 
-  // Move a team from index 'from' to index 'to'
-  const moveTo = (from, to) => {
-    if (from === to) return;
+  // Set position `i` to `team`. If `team` is already sitting at some other position,
+  // the two positions simply swap contents — so there's never a duplicate and never
+  // a gap, without the player having to manually clear the old spot first.
+  const setPosition = (i, team) => {
     hasInteracted.current = true;
+    const otherIdx = draft.indexOf(team);
     const d = [...draft];
-    const [item] = d.splice(from, 1);
-    d.splice(to, 0, item);
+    if (otherIdx !== -1 && otherIdx !== i) {
+      d[otherIdx] = draft[i];
+      d[i] = team;
+      setJustSwapped({a: i, b: otherIdx});
+      setTimeout(() => setJustSwapped(null), 900);
+    } else {
+      d[i] = team;
+    }
     setDraft(d);
-  };
-
-  // Mouse/pointer drag handlers
-  const onDragStart = (i) => setDragIdx(i);
-  const onDragOver = (e, i) => { e.preventDefault(); setDragOver(i); };
-  const onDrop = (i) => { if(dragIdx!==null) moveTo(dragIdx, i); setDragIdx(null); setDragOver(null); };
-  const onDragEnd = () => { setDragIdx(null); setDragOver(null); };
-
-  // Touch drag handlers
-  const onTouchStart = (e, i) => {
-    touchDragRef.current = { startIdx: i, startY: e.touches[0].clientY };
-  };
-  const onTouchMove = (e) => {
-    e.preventDefault();
-    if (!touchDragRef.current) return;
-    const y = e.touches[0].clientY;
-    const el = document.elementFromPoint(e.touches[0].clientX, y);
-    const row = el?.closest('[data-season-idx]');
-    if (row) {
-      const overIdx = parseInt(row.getAttribute('data-season-idx'));
-      if (!isNaN(overIdx)) setDragOver(overIdx);
-    }
-  };
-  const onTouchEnd = () => {
-    if (touchDragRef.current && dragOver !== null) {
-      moveTo(touchDragRef.current.startIdx, dragOver);
-    }
-    touchDragRef.current = null;
-    setDragOver(null);
-    setDragIdx(null);
   };
 
   const handleSubmit = async () => {
@@ -6934,8 +6910,10 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
           <div style={S.card}>
             <div style={{...S.ct,marginBottom:4}}>📝 Set Your Prediction</div>
             <div style={{fontSize:12,color:"#64748B",marginBottom:6}}>
-              Drag teams up or down to rank them 1st to 20th. Your order is saved automatically as you go —
-              come back and refine it anytime before submitting. Once submitted it cannot be changed.
+              Pick a team for each position, 1st to 20th. Choosing a team that's already placed
+              elsewhere just swaps the two — no need to clear anything first. Your order is saved
+              automatically as you go — come back and refine it anytime before submitting.
+              Once submitted it cannot be changed.
               Closes {new Date(positionDeadline).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}.
             </div>
             {(draftSaving || draftSavedAt) && (
@@ -6943,35 +6921,35 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
                 {draftSaving ? "💾 Saving…" : `✓ Draft saved ${draftSavedAt.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}`}
               </div>
             )}
-            {draft.map((t,i) => (
-              <div
-                key={t}
-                data-season-idx={i}
-                draggable
-                onDragStart={()=>onDragStart(i)}
-                onDragOver={e=>onDragOver(e,i)}
-                onDrop={()=>onDrop(i)}
-                onDragEnd={onDragEnd}
-                onTouchStart={e=>onTouchStart(e,i)}
-                onTouchMove={onTouchMove}
-                onTouchEnd={onTouchEnd}
-                style={{
-                  display:"flex",alignItems:"center",gap:10,
-                  padding:"10px 12px",
-                  background:dragOver===i?"#4C1D9544":dragIdx===i?"#1E293B88":"#0F172A",
-                  borderRadius:10,marginBottom:5,
-                  border:dragOver===i?"2px solid #7C3AED":"2px solid #1E293B",
-                  cursor:"grab",userSelect:"none",
-                  transform:dragIdx===i?"scale(0.98)":"scale(1)",
-                  transition:"background 0.1s,border 0.1s",
-                  touchAction:"none",
-                }}>
-                <span style={{fontSize:16,fontWeight:800,color:"#7C3AED",width:28,textAlign:"center",flexShrink:0}}>{i+1}</span>
-                <Badge team={t} size={28}/>
-                <span style={{flex:1,fontSize:16,fontWeight:700,color:"#E2E8F0"}}>{t}</span>
-                <span style={{fontSize:20,color:"#334155",flexShrink:0}}>⠿</span>
-              </div>
-            ))}
+            {draft.map((t,i) => {
+              const swapped = justSwapped && (justSwapped.a===i || justSwapped.b===i);
+              return (
+                <div key={i}
+                  style={{
+                    display:"flex",alignItems:"center",gap:10,
+                    padding:"9px 12px",
+                    background:swapped?"#4C1D9544":"#0F172A",
+                    borderRadius:10,marginBottom:5,
+                    border:swapped?"2px solid #7C3AED":"2px solid #1E293B",
+                    transition:"background 0.4s,border 0.4s",
+                  }}>
+                  <span style={{fontSize:16,fontWeight:800,color:"#7C3AED",width:26,textAlign:"center",flexShrink:0}}>{i+1}</span>
+                  <Badge team={t} size={26}/>
+                  <select
+                    value={t}
+                    onChange={e=>setPosition(i, e.target.value)}
+                    style={{
+                      flex:1,fontSize:15,fontWeight:700,color:"#E2E8F0",
+                      background:"#1E293B",border:"1px solid #334155",borderRadius:8,
+                      padding:"8px 10px",WebkitAppearance:"none",appearance:"none",
+                    }}>
+                    {[...PL_TEAMS_2526].sort().map(team=>(
+                      <option key={team} value={team}>{team}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
             <button style={{...S.bb,marginTop:14,padding:"16px",fontSize:16,fontWeight:800}}
               onClick={handleSubmit}>
               🔒 Submit League Prediction
