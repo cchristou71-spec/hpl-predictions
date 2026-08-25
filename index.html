@@ -2172,7 +2172,7 @@ function App(){
           seasonActual={effectiveSeasonActual} seasonPts={seasonPts} seasonGP={seasonGP}
           saveAll={saveAll} toast_={toast_} setTab={setTab} seasonLabel={seasonLabel}
         />}
-        {tab==="league"&&<League {...props} me={me}/>}
+        {tab==="league"&&<League {...props} me={me} setTab={setTab} seasonPreds={seasonPreds} positionDeadline={positionDeadline}/>}
         {tab==="admin"&&<Admin {...props} adminPws={adminPws} setAdminPws={setAdminPws} positionDeadline={positionDeadline} setPositionDeadline={setPositionDeadline} setFixtureDeadlines={setFixtureDeadlines} publicRevealTimes={publicRevealTimes} setPublicRevealTimes={setPublicRevealTimes} fixtures={fixtures} displayFixtures={displayFixtures} demoMode={demoMode} setDemoMode={setDemoMode} leagueRevealed={leagueRevealed} setLeagueRevealed={setLeagueRevealed} setFixtures={setFixtures} predictions={predictions} setPredictions={setPredictions} jokers={jokers} setJokers={setJokers} pins={pins} setPins={setPins} reveals={reveals} setReveals={setReveals} deadlines={deadlines} setDeadlines={setDeadlines} manuallyUnlocked={manuallyUnlocked} setManuallyUnlocked={setManuallyUnlocked} players={players} setPlayers={setPlayers} admin={admin} setAdmin={setAdmin} toast_={toast_} saveAll={saveAll} syncStatus={syncStatus} setSupaLoading={setSupaLoading} seasonActual={seasonActual} setSeasonActual={setSeasonActual} seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds} seasonPts={seasonPts} setSeasonPts={setSeasonPts} seasonGP={seasonGP} standingsSource={standingsSource} mwOverrides={mwOverrides} setMwOverrides={setMwOverrides} entryFees={entryFees} setEntryFees={setEntryFees} seasonLabel={seasonLabel} setSeasonLabel={setSeasonLabel} emails={emails} setEmails={setEmails} onForceRefresh={()=>{setRefreshStatus("loading");liveRefresh(fixtures, mwOverrides).then(({fixtures:nFx,updated,dateChanges,fixturesBuilt})=>{if(fixturesBuilt||updated>0||dateChanges>0)setFixtures(nFx);setRefreshStatus({updated,dateChanges});setTimeout(()=>setRefreshStatus(null),4000);toast_(fixturesBuilt?`✅ Fixtures loaded from ESPN! ${Object.keys(nFx).length} match weeks`:`ESPN refresh: ${updated} results, ${dateChanges} date changes`);}).catch(e=>{setRefreshStatus(null);toast_("ESPN refresh failed: "+e.message,"error");});}}/>}
       </main>
     </div>
@@ -4200,7 +4200,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
   );
 }
 
-function League({fixtures,displayFixtures,predictions,reveals,publicReveals,players,jokers,me}){
+function League({fixtures,displayFixtures,predictions,reveals,publicReveals,players,jokers,me,setTab,seasonPreds,positionDeadline}){
   const revs=Object.entries(reveals||{}).filter(([,v])=>v).map(([k])=>parseInt(k)).sort((a,b)=>a-b);
 
   // Helper: compute each player's total points using only a given subset of revealed weeks
@@ -4273,6 +4273,38 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
 
   return(
     <div>
+      {/* Nudge towards the league position prediction — easy to miss since it's a
+          separate tab, so surface it here where everyone already lands to check
+          standings. Once the deadline's passed, still tappable — you can view
+          everyone's positions on that page even though yours can no longer change
+          (that page's own lock handles blocking edits). Hides entirely once this
+          player has submitted, so it doesn't nag someone who's already done it —
+          they can still get to that page normally via the tab bar. */}
+      {me && !(seasonPreds?.[me]?.length===20) && (()=>{
+        const closed = positionDeadline && new Date(positionDeadline) <= new Date();
+        return (
+          <button onClick={()=>setTab("season")}
+            style={{
+              display:"flex",alignItems:"center",gap:10,width:"100%",textAlign:"left",
+              background:closed?"#1E293B":"linear-gradient(90deg,#7C3AED,#5B21B6)",
+              border:"none",borderRadius:12,padding:"14px 16px",marginBottom:12,
+              cursor:"pointer",
+            }}>
+            <span style={{fontSize:22,flexShrink:0}}>{closed?"🔒":"🏆"}</span>
+            <span style={{flex:1}}>
+              <div style={{fontSize:14,fontWeight:800,color:closed?"#94A3B8":"#fff"}}>
+                {closed ? "League position predictions closed" : "Set your league position prediction"}
+              </div>
+              <div style={{fontSize:11,color:closed?"#64748B":"#E9D5FF",marginTop:1}}>
+                {closed
+                  ? "The deadline's passed without a submission from you — but you can still view everyone else's positions"
+                  : `Predict the final table, 1st to 20th — closes ${new Date(positionDeadline).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}`}
+              </div>
+            </span>
+            <span style={{fontSize:18,color:closed?"#64748B":"#fff",flexShrink:0}}>›</span>
+          </button>
+        );
+      })()}
       <div style={S.card}>
         <div style={S.ct}>🏆 Season Standings</div>
         <div style={{color:"#64748B",fontSize:12,marginTop:2}}>{revs.length}/38 match weeks revealed</div>
