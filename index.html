@@ -173,6 +173,26 @@ function rowsToPredictions(predRows) {
   return predictions;
 }
 
+// The "current" match week — the first one whose deadline hasn't passed yet (or, if
+// no deadline has been set for it, treated as still open). Once a week's deadline
+// passes, this naturally advances to the next one. Shared by the Predict tab (which
+// match week to open by default) and the Results tab (which week to land on by
+// default) so they move forward together as the season progresses.
+function computeCurrentMW(deadlines, fixturesObj) {
+  const mws = Object.keys(fixturesObj||{}).map(Number)
+    .filter(w=>fixturesObj[w]&&fixturesObj[w].length>0)
+    .sort((a,b)=>a-b);
+  if(!mws.length) return 1;
+  const now = new Date();
+  for (const w of mws) {
+    const dl = deadlines[w];
+    if (!dl) return w; // no deadline configured yet — treat as the open/current week
+    const d = new Date(dl);
+    if (isNaN(d.getTime()) || now < d) return w; // deadline hasn't passed
+  }
+  return mws[mws.length-1]; // every deadline has passed — stay on the last week
+}
+
 // Load all shared state from Supabase
 async function loadFromSupabase() {
   const [reveals, deadlines, pins, predRows] = await Promise.all([
@@ -1581,6 +1601,20 @@ function App(){
       document.removeEventListener("visibilitychange", refreshLiveState);
     };
   },[]);
+
+  // Once deadlines have actually loaded from Supabase (the initial `mw` guess at
+  // mount time only has the static fixture calendar to go on, not real deadlines),
+  // correct the default predicting week to the current open one — the first week
+  // whose deadline hasn't passed. Runs once, right after load; never overrides a
+  // week the person has since navigated to themselves.
+  const mwCorrectedRef=React.useRef(false);
+  useEffect(()=>{
+    if(supaLoading) return;
+    if(mwCorrectedRef.current) return;
+    mwCorrectedRef.current=true;
+    const cur=computeCurrentMW(deadlines, fixtures);
+    if(cur) setMw(cur);
+  },[supaLoading]);
 
   const toast_=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
   const saveAll=(patch, supaDelta)=>{
@@ -3412,7 +3446,7 @@ function RecentResults({fixtures,displayFixtures}){
   );
 }
 
-function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,players,jokers,me,admin,expMW,setExpMW,search,setSearch,searchMode,setSearchMode,homeQ,setHomeQ,awayQ,setAwayQ}){
+function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,deadlines,players,jokers,me,admin,expMW,setExpMW,search,setSearch,searchMode,setSearchMode,homeQ,setHomeQ,awayQ,setAwayQ}){
   const [summaryOpen,setSummaryOpen]=useState(false);
   const mwRefs=React.useRef({});
   const jumpToMW=(w)=>{
@@ -3475,27 +3509,33 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,pla
     }).sort((a,b)=>a.displayMW-b.displayMW);
   },[allFx,homeQ,awayQ]);
 
-  // Show MWs that have results OR player has predictions OR are revealed
-  // Results always visible; other players' predictions only shown when revealed
+  // "Current" match week per deadlines — the first week whose deadline hasn't passed
+  // (see computeCurrentMW at top of file). Once MW1's deadline passes, this becomes
+  // MW2, and so on, so the page below tracks forward with the season automatically.
+  const nowOpenMW = computeCurrentMW(deadlines||{}, displayFixtures||fixtures);
+
+  // Show MWs that have results OR player has predictions OR are revealed OR are the
+  // current open week (even with nothing in it yet) — that last part is what lets
+  // the page actually land on/navigate to the new current week the moment the
+  // previous one's deadline passes, rather than only once something's in it.
   const allMWs = Array.from({length:(Object.keys(displayFixtures||fixtures).length===0?0:Math.max(...Object.keys(displayFixtures||fixtures).map(Number)))},(_,i)=>i+1)
     .filter(w => {
       const mwFxList = (displayFixtures||fixtures)[w] || [];
       const hasResult = mwFxList.some(fx => fx.result);
       const myPreds = me && Object.keys(predictions[me]||{}).some(id=>id.startsWith(`${w}-`));
-      return hasResult || myPreds || reveals[w] || publicReveals[w];
+      return hasResult || myPreds || reveals[w] || publicReveals[w] || w===nowOpenMW;
     })
     .sort((a,b)=>b-a);
 
-  // Auto-expand the current (most recent) match week if it's already revealed, so
-  // players land straight on the results instead of having to tap to open it —
-  // e.g. when following the reveal-email link. Only applies when nothing else has
-  // set expMW yet (a deep link's ?mw=N or a manual tap always takes priority).
-  const currentMW = allMWs[0];
+  // Default to the current open week once its deadline has taken effect, so this
+  // page moves forward with the season instead of staying parked on the last one.
+  // Only applies when nothing else has already set expMW — a deep link's ?mw=N or a
+  // manual tap always takes priority, and this only ever fires the first time.
   useEffect(()=>{
-    if(expMW===null && currentMW && (reveals[currentMW]||publicReveals[currentMW])){
-      setExpMW(currentMW);
+    if(expMW===null && nowOpenMW){
+      setExpMW(nowOpenMW);
     }
-  },[currentMW, reveals[currentMW], publicReveals[currentMW]]);
+  },[nowOpenMW]);
 
   const printMW = (w) => {
     const fxList = (displayFixtures||fixtures)[w] || [];
@@ -4641,6 +4681,19 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
     });
     return bestMw;
   });
+  // Same fix as Predict/Results: the lazy initializer above only has a rough
+  // calendar-window guess to go on (Supabase deadlines haven't loaded at mount
+  // time), so correct once to the actual current open week — the first one whose
+  // deadline hasn't passed — as soon as real deadline data is available. Runs once;
+  // never overrides admin manually navigating to a different week afterwards.
+  const ewCorrectedRef=React.useRef(false);
+  useEffect(()=>{
+    if(!deadlines||Object.keys(deadlines).length===0) return; // wait for real data
+    if(ewCorrectedRef.current) return;
+    ewCorrectedRef.current=true;
+    const cur=computeCurrentMW(deadlines, displayFixtures||fixtures);
+    if(cur) setEw(cur);
+  },[deadlines]);
   const[newPw1,setNewPw1]=useState('');
   const[newPw2,setNewPw2]=useState('');
   const[managingAdmins,setManagingAdmins]=useState(false);
