@@ -1373,6 +1373,45 @@ function App(){
 
 
 
+  // Applies a liveRefresh() result's standings/points/GP consistently — shared by
+  // the initial-mount refresh and the periodic live-window refresh below, so both
+  // keep the season table up to date rather than only the very first one.
+  const applyStandingsResult = (newFx, standings, sPts, sGP) => {
+    if(standings && standings.length>=10){
+      setSeasonActual(standings);
+      setStandingsSource('espn');
+      if(sPts && Object.keys(sPts).length>0){
+        setSeasonPts(sPts);
+        supa.setState("season_pts", sPts).catch(()=>{});
+      }
+      // Always override with GP derived fresh from actual results — more reliable
+      // than whatever GP the standings endpoint itself reported.
+      const derivedGP = deriveStandings(newFx).standingsGP;
+      if(derivedGP && Object.keys(derivedGP).length>0){
+        setSeasonGP(derivedGP);
+        supa.setState("season_gp", derivedGP).catch(()=>{});
+      }
+      supa.setState("season_actual", standings).catch(()=>{});
+    } else {
+      // ESPN's dedicated standings endpoint failed or came back too thin (e.g. very
+      // early in a new season). Always derive fresh from the fixture results we
+      // already have and already trust (deriveStandings) — never fall back to a
+      // previously-cached Supabase snapshot here, since that goes stale the moment
+      // more results come in and nothing was left to refresh it. deriveStandings is
+      // cheap (purely local) so recomputing it every time costs nothing.
+      const derived = deriveStandings(newFx);
+      if(derived.standings && derived.standings.length>=10){
+        setSeasonActual(derived.standings);
+        setSeasonPts(derived.standingsPts);
+        setSeasonGP(derived.standingsGP);
+        setStandingsSource('derived');
+        supa.setState("season_actual", derived.standings).catch(()=>{});
+        supa.setState("season_pts", derived.standingsPts).catch(()=>{});
+        supa.setState("season_gp", derived.standingsGP).catch(()=>{});
+      }
+    }
+  };
+
   // Live refresh on every app open
   useEffect(()=>{
     setRefreshStatus("loading");
@@ -1388,48 +1427,8 @@ function App(){
         }));
         if(Object.keys(gp).length>0) setSeasonGP(gp);
       } catch(e){}
-      if(standings&&standings.length>=10){
-        setSeasonActual(standings);
-        setStandingsSource('espn');
-        if(sPts&&Object.keys(sPts).length>0){
-          setSeasonPts(sPts);
-          supa.setState("season_pts", sPts).catch(()=>{});
-        }
-        if(sGP&&Object.keys(sGP).length>0){
-          // Always override with derived GP from actual results — more accurate
-          const derivedGP = deriveStandings(fixtures).standingsGP || sGP;
-          setSeasonGP(derivedGP);
-          supa.setState("season_gp", derivedGP).catch(()=>{});
-        }
-        try{ const cur=loadAll(); saveAll_master({...cur,season_actual:standings,season_pts:sPts||{},season_gp:sGP||{}}); }catch{}
-        supa.setState("season_actual", standings).catch(()=>{});
-        console.log("✅ Live standings:", standings[0], standings[1], standings[2], "pts:", sPts?.[standings[0]], "gp:", sGP?.[standings[0]]);
-      } else {
-        // ESPN's dedicated standings endpoint failed or came back too thin (e.g. very
-        // early in a new season). Try Supabase cache first; if that's also empty,
-        // fall back to a table built locally from the fixture results we already have
-        // and already trust (deriveStandings) — so the actual table still shows
-        // rather than staying blank until that separate endpoint starts behaving.
-        Promise.all([
-          supa.getState("season_actual").catch(()=>null),
-          supa.getState("season_pts").catch(()=>null),
-        ]).then(([sa,sp])=>{
-          if(sa&&sa.length>=18){
-            setSeasonActual(sa); setStandingsSource('supabase');
-            if(sp&&Object.keys(sp).length>0) setSeasonPts(sp);
-          } else {
-            const derived = deriveStandings(newFx);
-            if(derived.standings&&derived.standings.length>=10){
-              setSeasonActual(derived.standings);
-              setSeasonPts(derived.standingsPts);
-              setSeasonGP(derived.standingsGP);
-              setStandingsSource('derived');
-              supa.setState("season_actual", derived.standings).catch(()=>{});
-              supa.setState("season_pts", derived.standingsPts).catch(()=>{});
-            }
-          }
-        });
-      }
+      applyStandingsResult(newFx, standings, sPts, sGP);
+      console.log("Live standings applied:", standings?.[0]||"(derived)");
       // Record last refresh time in BST
       const now = new Date();
       const bstOffset = 1; // BST = UTC+1
@@ -1475,11 +1474,15 @@ function App(){
         return diffMin>-30 && diffMin<120; // -30min before to 2hrs after KO
       });
       if(!hasLiveToday) return;
-      liveRefresh(fixtures, mwOverrides).then(({fixtures:newFx,updated,dateChanges})=>{
+      liveRefresh(fixtures, mwOverrides).then(({fixtures:newFx,updated,dateChanges,standings,standingsPts:sPts,standingsGP:sGP})=>{
         if(updated>0||dateChanges>0){
           setFixtures(newFx);
           if(updated>0) toast_(`⚽ Scores updated: ${updated} result${updated>1?"s":""}`,"ok");
         }
+        // Keep the season table live too while games are actually being played —
+        // previously this only ever happened once, on the very first app load, so
+        // the table could freeze mid-matchday and never catch up with late results.
+        if(updated>0) applyStandingsResult(newFx, standings, sPts, sGP);
       }).catch(()=>{});
     };
     const interval=setInterval(doRefresh, 3*60*1000); // every 3 minutes
@@ -5286,6 +5289,7 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
             }}
             style={{...S.inp,marginBottom:0}}/>
         </div>
+        <SeasonAutoSubmitPanel toast_={toast_}/>
         <div style={{...S.card, background:leagueRevealed?"#064E3B22":"#0F172A", border:`1px solid ${leagueRevealed?"#34D399":"#334155"}`}}>
           <div style={{fontSize:13,color:"#94A3B8",marginBottom:8}}>
             {leagueRevealed
@@ -5579,6 +5583,54 @@ function RevealEmailPanel({ew,reveals,emails,toast_}){
       <button onClick={sendNow} disabled={sending}
         style={{padding:"8px 14px",background:"#A78BFA22",border:"1px solid #A78BFA",borderRadius:8,color:"#A78BFA",fontSize:13,fontWeight:700,cursor:sending?"default":"pointer",opacity:sending?0.6:1}}>
         {sending?"Sending…":"✉️ Send reveal email now"}
+      </button>
+    </div>
+  );
+}
+
+// Auto-submits any player's complete-but-unsubmitted league position draft once the
+// position-predictions deadline has passed — normally handled automatically by an
+// hourly server check, this button lets admin trigger/re-check it on demand.
+function SeasonAutoSubmitPanel({toast_}){
+  const[running,setRunning]=useState(false);
+
+  const runNow=async()=>{
+    setRunning(true);
+    try{
+      const res=await fetch(`${SUPA_URL}/functions/v1/season-auto-submit?manual=1`,{
+        method:"POST",
+        headers:{"apikey":SUPA_KEY,"Authorization":`Bearer ${SUPA_KEY}`,"Content-Type":"application/json"}
+      });
+      const data=await res.json().catch(()=>null);
+      if(!res.ok||!data?.ok){
+        toast_("Auto-submit check failed: "+(data?.error||res.status),"error");
+      } else if((data.submitted||[]).length>0){
+        toast_(`✅ Auto-submitted for ${data.submitted.length} player${data.submitted.length===1?"":"s"}: ${data.submitted.join(", ")}`,"ok");
+      } else if(data.reason==="deadline hasn't passed yet"){
+        toast_("Deadline hasn't passed yet — nothing to auto-submit until then, even on a manual check.","error");
+      } else {
+        toast_("No unsubmitted drafts found to auto-submit","ok");
+      }
+    }catch(e){
+      toast_("Auto-submit check failed: "+e.message,"error");
+    }
+    setRunning(false);
+  };
+
+  return(
+    <div style={{...S.card,border:"1px solid #A78BFA44",marginBottom:10}}>
+      <span style={S.ct}>🤖 Auto-submit unfinished league predictions</span>
+      <div style={{fontSize:12,color:"#64748B",marginTop:8,marginBottom:12,lineHeight:1.6}}>
+        Once the deadline above passes, any player who dragged/edited their league position order but never
+        tapped final Submit has that in-progress order automatically locked in as their prediction — so
+        forgetting the last tap doesn't cost them the season. Runs automatically (hourly check), once per season.
+        This button re-checks and runs it on demand instead of waiting for the next hourly tick — but it only
+        ever acts once the deadline has genuinely passed, even when triggered manually, so tapping it early
+        (e.g. just to test it) is always safe and won't submit anyone's prediction early.
+      </div>
+      <button onClick={runNow} disabled={running}
+        style={{padding:"8px 14px",background:"#A78BFA22",border:"1px solid #A78BFA",borderRadius:8,color:"#A78BFA",fontSize:13,fontWeight:700,cursor:running?"default":"pointer",opacity:running?0.6:1}}>
+        {running?"Checking…":"🤖 Run auto-submit check now"}
       </button>
     </div>
   );
@@ -6659,19 +6711,27 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
         <div style={{...S.card,marginBottom:16}}>
           <div style={{...S.ct,marginBottom:2}}>🏆 League Predictions Leaderboard</div>
           <div style={{fontSize:11,color:"#64748B",marginBottom:10}}>
-            {seasonActual&&seasonActual.length>0
+            {!leagueRevealed
+              ? "🔒 Other players' points stay hidden until admin reveals the league table — you can still see your own"
+              : seasonActual&&seasonActual.length>0
               ? "Based on current PL standings — updates live each week"
               : "⏳ Fetching live standings... reopen the app if scores don't appear shortly"}
           </div>
           {(() => {
-            // Build scored list and sort by pts desc
+            // A player's points are only visible if the league's been revealed, or
+            // it's your own row — same rule the "All Predictions vs Actual" table
+            // below already follows; this leaderboard just wasn't applying it.
+            const canSeePts = (p) => leagueRevealed || p===me;
             const scored = players.map(p => ({
               p,
               hasPred: !!(seasonPreds?.[p]&&seasonPreds[p].length===20),
-              pts: (seasonActual&&seasonActual.length===20&&seasonPreds?.[p]&&seasonPreds[p].length===20)
+              visible: canSeePts(p),
+              pts: (canSeePts(p) && seasonActual&&seasonActual.length===20&&seasonPreds?.[p]&&seasonPreds[p].length===20)
                 ? calcSeasonScore(seasonPreds[p], seasonActual) : null
             }));
-            // Sort: submitted with pts first (desc), then submitted no pts, then not submitted
+            // Sort: visible pts first (desc), then submitted, then not submitted.
+            // Hidden (not-yet-revealed) entries don't get sorted by a pts value
+            // nobody's supposed to see yet — they just group after the visible ones.
             scored.sort((a,b) => {
               if(a.pts!==null && b.pts!==null) return b.pts - a.pts;
               if(a.pts!==null) return -1;
@@ -6681,32 +6741,38 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
               return 0;
             });
             let rank = 0;
-            return scored.map(({p, hasPred, pts}) => {
-              if(pts!==null) rank++;
+            return scored.map(({p, hasPred, pts, visible}) => {
+              // Only assign/show a rank number once the league's actually revealed —
+              // showing "me" as rank 1 pre-reveal (just because I'm the only visible
+              // entry) would falsely imply a standing nobody can confirm yet.
+              if(leagueRevealed && pts!==null) rank++;
               return (
                 <div key={p} style={{display:"flex",alignItems:"center",gap:10,
                   padding:"10px 8px",borderBottom:"1px solid #1E293B",
                   background:p===me?"#7C3AED11":"transparent",
                   borderRadius:p===me?6:0}}>
                   <span style={{fontSize:15,fontWeight:800,color:"#475569",width:24,textAlign:"center",flexShrink:0}}>
-                    {pts!==null ? rank : "–"}
+                    {leagueRevealed && pts!==null ? rank : "–"}
                   </span>
                   <div style={{flex:1}}>
                     <div style={{display:"flex",alignItems:"baseline",gap:8}}>
                       <span style={{fontWeight:700,fontSize:15,color:playerColour(p)}}>
                         {p}{p===me?" 👤":""}
                       </span>
-                      {hasPred && (
+                      {hasPred && visible && (
                         <span style={{fontSize:22,fontWeight:800,color:playerColour(p),lineHeight:1}}>
                           {pts!==null ? pts : "–"}
                         </span>
                       )}
-                      {hasPred && pts!==null && (
+                      {hasPred && visible && pts!==null && (
                         <span style={{fontSize:11,color:"#64748B",fontWeight:600}}>pts</span>
                       )}
                     </div>
-                    {hasPred && pts===null && (
+                    {hasPred && visible && pts===null && (
                       <div style={{fontSize:11,color:"#64748B"}}>⏳ loading standings</div>
+                    )}
+                    {hasPred && !visible && (
+                      <div style={{fontSize:12,color:"#34D399",fontStyle:"italic"}}>✅ submitted — hidden until reveal</div>
                     )}
                     {!hasPred && (
                       <div style={{fontSize:12,color:"#475569",fontStyle:"italic"}}>not submitted</div>
