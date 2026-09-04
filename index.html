@@ -1660,6 +1660,11 @@ function App(){
   // otherwise the app only ever loads other players' data once, at startup, and
   // someone who's had the app open since before a match week was revealed (or before
   // someone else submitted a prediction) never sees it appear without a manual reload.
+  // Also covers league position predictions (season_preds) — without this, a
+  // player's own tab can keep showing their own submission as "still there" long
+  // after it's actually been changed or removed server-side (this is what caused
+  // confusion after the 4 Sept data-loss incident: an affected player's tab kept
+  // showing their old, no-longer-existing submission until they manually reloaded).
   // Mirrors the existing ESPN score-refresh pattern (3-minute interval), plus an
   // immediate refresh whenever the tab/app comes back into view — the common case on
   // mobile being someone backgrounding the app for a while then returning to it.
@@ -1671,8 +1676,9 @@ function App(){
         supa.getState("deadlines"),
         supa.getState("public_reveals"),
         supa.getState("player_config"),
+        supa.getState("season_preds"),
         fetchAllPredictionRows(),
-      ]).then(([rv,dl,pr,pc,predRows])=>{
+      ]).then(([rv,dl,pr,pc,sp,predRows])=>{
         if(rv) setReveals(rv);
         if(dl) setDeadlines(dl);
         if(pr) setPublicReveals(pr);
@@ -1680,6 +1686,7 @@ function App(){
           setPlayers(pc.players);
           if(pc.colours) Object.assign(PLAYER_COLOURS, pc.colours);
         }
+        if(sp) setSeasonPreds(sp); // {} is valid (means nobody's submitted) and still truthy
         // Guard against a poll that technically succeeded but came back with nothing
         // (a brief Supabase hiccup, rate-limit, etc.) — only replace predictions when
         // we actually got rows back, never blank out what's already showing.
