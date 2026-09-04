@@ -616,7 +616,18 @@ async function liveRefresh(fixtures, mwOverrides) {
         if (!evDateObj || isNaN(evDateObj)) return;
 
         const espnMw = ev.week?.number || ev.competitions?.[0]?.week?.number || null;
-        const completed = ev.status?.type?.completed === true || ev.status?.type?.state === "post";
+        // Same rigorous "genuinely finished" check used by the regular live-score
+        // refresh below — a bare state==="post" isn't trustworthy enough on its own
+        // (ESPN's live feed can occasionally report this prematurely mid-match); also
+        // require the explicit completed flag or unambiguous full-time wording. This
+        // was tightened after a report of a 0-0 briefly showing as final while a
+        // second-half game was still being played (the regular 3-minute refresh later
+        // corrected it, but this closes the gap for the one-time fixture bootstrap too).
+        const statusDescBoot = (ev.status?.type?.description||ev.status?.type?.name||"").toLowerCase();
+        const isFTBoot = statusDescBoot.includes("full time") || statusDescBoot.includes("final") ||
+          statusDescBoot.includes("ft") || statusDescBoot.includes("aet") ||
+          statusDescBoot.includes("full-time") || statusDescBoot.includes("ended");
+        const completed = ev.status?.type?.completed === true || isFTBoot;
         const hasScores = homeComp.score !== null && homeComp.score !== undefined && homeComp.score !== "";
         let result = null;
         if (completed && hasScores) {
@@ -1677,8 +1688,9 @@ function App(){
         supa.getState("public_reveals"),
         supa.getState("player_config"),
         supa.getState("season_preds"),
+        supa.getState("position_predictions_deadline"),
         fetchAllPredictionRows(),
-      ]).then(([rv,dl,pr,pc,sp,predRows])=>{
+      ]).then(([rv,dl,pr,pc,sp,pd,predRows])=>{
         if(rv) setReveals(rv);
         if(dl) setDeadlines(dl);
         if(pr) setPublicReveals(pr);
@@ -1687,6 +1699,7 @@ function App(){
           if(pc.colours) Object.assign(PLAYER_COLOURS, pc.colours);
         }
         if(sp) setSeasonPreds(sp); // {} is valid (means nobody's submitted) and still truthy
+        if(pd) setPositionDeadline(pd); // e.g. an admin-extended deadline — a stale tab must pick this up, not enforce an old cutoff
         // Guard against a poll that technically succeeded but came back with nothing
         // (a brief Supabase hiccup, rate-limit, etc.) — only replace predictions when
         // we actually got rows back, never blank out what's already showing.
@@ -1698,6 +1711,43 @@ function App(){
     return ()=>{
       clearInterval(interval);
       document.removeEventListener("visibilitychange", refreshLiveState);
+    };
+  },[]);
+
+  // Auto-detect and pick up a new deployed version, without relying on the person
+  // ever closing/reopening the app themselves — many players here are older and not
+  // especially tech-savvy, and simply leave a tab open indefinitely (a phone browser
+  // tab can sit backgrounded for weeks). Every fix pushed out otherwise only ever
+  // reaches someone the next time they happen to fully close and reopen the app,
+  // which for some players might be "never" — exactly what caused one player to get
+  // cut off by an already-superseded deadline while trying to resubmit.
+  //
+  // Works by comparing this page's own ETag/Last-Modified (set by Vercel on every
+  // deploy) against what the server currently has, on the same schedule as the data
+  // poll above plus immediately whenever the tab becomes visible again — the latter
+  // is the important one, since "phone was in a pocket for two days" is the common
+  // case here, not "tab open and actively watched continuously."
+  useEffect(()=>{
+    let baselineTag=null;
+    const checkForUpdate=async()=>{
+      if(document.visibilityState==="hidden") return; // only worth checking while actually visible
+      try{
+        const res=await fetch(window.location.href,{method:"HEAD",cache:"no-store"});
+        const tag=res.headers.get("etag")||res.headers.get("last-modified");
+        if(!tag) return; // host isn't sending either header — nothing to compare, skip silently
+        if(baselineTag===null){ baselineTag=tag; return; } // first check just establishes what "current" means
+        if(tag!==baselineTag){
+          toast_("🔄 Updating to the latest version…","ok");
+          setTimeout(()=>window.location.reload(),3000); // brief pause so the message is actually seen before the page changes under them
+        }
+      }catch(e){ /* silent — a network hiccup just means we try again next interval */ }
+    };
+    checkForUpdate();
+    const interval=setInterval(checkForUpdate,3*60*1000); // every 3 minutes, matching the data poll above
+    document.addEventListener("visibilitychange",checkForUpdate);
+    return ()=>{
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange",checkForUpdate);
     };
   },[]);
 
