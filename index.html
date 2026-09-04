@@ -6625,7 +6625,14 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
     // so this doubles as a last look before it's locked in for good.
     const reviewText = draft.map((team,i)=>`${i+1}. ${team}`).join("\n");
     if (!window.confirm(`Submit your league prediction? This cannot be changed once submitted.\n\n${reviewText}`)) return;
-    const newPreds = {...(seasonPreds||{}), [me]: draft};
+    // Re-fetch the freshest server copy right before merging — never trust the
+    // locally-held seasonPreds state here, since it can be stale if this tab's been
+    // open a while and other players submitted in the meantime. Merging against a
+    // stale local copy would silently wipe their entries from the shared record.
+    let latestPreds;
+    try { latestPreds = await supa.getState("season_preds"); } catch { latestPreds = null; }
+    const base = (latestPreds && typeof latestPreds==="object") ? latestPreds : (seasonPreds||{});
+    const newPreds = {...base, [me]: draft};
     setSeasonPreds(newPreds);
     setSubmitted(true);
     // Save to localStorage immediately as backup
