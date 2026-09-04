@@ -173,6 +173,71 @@ function rowsToPredictions(predRows) {
   return predictions;
 }
 
+// ── BACKUP & RESTORE ─────────────────────────────────────────────────────────
+// Lightweight safety net for the two things that turned out to be genuinely at
+// risk: league position predictions (a single shared blob, vulnerable to a
+// stale-tab overwrite before the fix elsewhere in this file) and weekly
+// predictions (safe from that specific bug since they're per-row, but still
+// exposed to a bad bulk admin edit or a "reset for new season" mistake). A
+// snapshot is taken before every write that could plausibly lose something,
+// restorable from Admin in a couple of taps — no digging through browser
+// storage or asking players to redo their picks next time.
+
+// Snapshots season_preds before overwriting it. Keeps the last 15 — season
+// predictions change rarely (a handful of times per season), so this is cheap.
+async function backupSeasonPreds(currentValue, label) {
+  try {
+    const existing = (await supa.getState("season_preds_backups")) || [];
+    const entry = { ts: new Date().toISOString(), label: label||"", value: currentValue||{} };
+    await supa.setState("season_preds_backups", [entry, ...existing].slice(0, 15));
+  } catch(e) { console.log("Season predictions backup failed (non-fatal):", e.message); }
+}
+
+// Snapshots the ENTIRE weekly predictions table (every player, every fixture) —
+// used before a bulk admin edit, from a manual "Backup now" button, and daily
+// via a scheduled Edge Function. Keeps the last 10 snapshots; each is a full
+// table dump so this is deliberately capped lower than the season one.
+async function backupPredictionsTable(label) {
+  try {
+    const rows = await fetchAllPredictionRows();
+    const existing = (await supa.getState("predictions_backups")) || [];
+    const entry = { ts: new Date().toISOString(), label: label||"", rows };
+    await supa.setState("predictions_backups", [entry, ...existing].slice(0, 10));
+    return rows.length;
+  } catch(e) { console.log("Predictions table backup failed (non-fatal):", e.message); return 0; }
+}
+
+// Restores a season_preds snapshot. Backs up whatever's currently there first —
+// a restore is itself always undoable, never a one-way door.
+async function restoreSeasonPredsBackup(entry) {
+  const current = (await supa.getState("season_preds")) || {};
+  await backupSeasonPreds(current, "before restore");
+  await supa.setState("season_preds", entry.value);
+  return entry.value;
+}
+
+// Restores a weekly-predictions snapshot by upserting every row back — same
+// deterministic "player_fixtureId" row id the real submission path uses, sent
+// in batches to keep each request a reasonable size. Backs up the current full
+// table first, same undo-safety as the season restore above.
+async function restorePredictionsBackup(entry) {
+  await backupPredictionsTable("before restore");
+  const rows = (entry.rows||[]).map(r => ({
+    id: `${r.player}_${r.fixture_id}`,
+    player: r.player,
+    fixture_id: r.fixture_id,
+    home_goals: r.home_goals,
+    away_goals: r.away_goals,
+    joker: r.joker || false,
+    updated_at: new Date().toISOString(),
+  }));
+  const chunkSize = 500;
+  for (let i=0; i<rows.length; i+=chunkSize) {
+    await supa.upsert("predictions", rows.slice(i, i+chunkSize));
+  }
+  return rowsToPredictions(entry.rows||[]);
+}
+
 // The "current" match week — the first one whose deadline hasn't passed yet (or, if
 // no deadline has been set for it, treated as still open). Once a week's deadline
 // passes, this naturally advances to the next one. Used for the *doing* pages —
@@ -4587,14 +4652,37 @@ function HPLPredictionsEditor({fixtures, displayFixtures, predictions, setPredic
   const saveAllEdits = async () => {
     setSaving(true);
     try {
-      const np = JSON.parse(JSON.stringify(predictions||{}));
-      Object.entries(editCells).forEach(([key, vals])=>{
+      // Snapshot the whole table before a bulk edit — this is the highest-risk
+      // action on weekly predictions (touches many rows at once), so it gets an
+      // automatic backup even without admin remembering to tap "Backup now".
+      await backupPredictionsTable("before bulk edit");
+      // Write directly to the real predictions table — same deterministic row id
+      // pattern ("player_fixtureId") the actual Predict-tab submission uses, so this
+      // correctly updates existing rows via upsert instead of being invisible to
+      // everyone. This previously wrote to an orphaned game_state key that nothing
+      // ever read back, so admin edits made here silently vanished on next reload —
+      // fixed as part of the wider audit after the league-predictions data-loss bug.
+      const rows = Object.entries(editCells).map(([key, vals]) => {
         const [player, fxId] = key.split("|");
-        if(!np[player]) np[player]={};
-        if(vals.homeGoals!==undefined&&vals.homeGoals!=='') np[player][fxId]={...(np[player][fxId]||{}),homeGoals:vals.homeGoals};
-        if(vals.awayGoals!==undefined&&vals.awayGoals!=='') np[player][fxId]={...(np[player][fxId]||{}),awayGoals:vals.awayGoals};
+        const existing = (predictions[player]||{})[fxId] || {};
+        const homeGoals = (vals.homeGoals!==undefined && vals.homeGoals!=='') ? vals.homeGoals : existing.homeGoals;
+        const awayGoals = (vals.awayGoals!==undefined && vals.awayGoals!=='') ? vals.awayGoals : existing.awayGoals;
+        return {
+          id: `${player}_${fxId}`,
+          player,
+          fixture_id: fxId,
+          home_goals: (homeGoals!==undefined && homeGoals!=='') ? parseInt(homeGoals) : null,
+          away_goals: (awayGoals!==undefined && awayGoals!=='') ? parseInt(awayGoals) : null,
+          joker: existing.joker || false,
+          updated_at: new Date().toISOString(),
+        };
       });
-      await supa.setState("predictions", np);
+      if (rows.length) await supa.upsert("predictions", rows);
+      const np = JSON.parse(JSON.stringify(predictions||{}));
+      rows.forEach(r => {
+        if (!np[r.player]) np[r.player] = {};
+        np[r.player][r.fixture_id] = { homeGoals: r.home_goals, awayGoals: r.away_goals, joker: r.joker };
+      });
       setPredictions(np);
       setEditCells({});
       toast_("✅ Predictions updated for all players");
@@ -4691,6 +4779,127 @@ function HPLPredictionsEditor({fixtures, displayFixtures, predictions, setPredic
         </table>
         {fxs.length===0&&<div style={{color:"#64748B",fontSize:12,padding:8}}>No fixtures for this match week.</div>}
       </div>
+    </div>
+  );
+}
+
+// Backup/restore panel for the two things audited after the 4 Sept league-
+// predictions data-loss incident: season position predictions (a single shared
+// blob, backed up automatically before every write) and weekly predictions (a
+// per-row table, backed up before bulk admin edits and via a daily scheduled
+// snapshot). Every restore backs up whatever's currently there first, so a
+// restore is itself always undoable — never a one-way door.
+function DataSafetyPanel({setSeasonPreds, setPredictions, toast_}){
+  const [seasonBackups, setSeasonBackups] = useState(null); // null = not loaded yet
+  const [predBackups, setPredBackups] = useState(null);
+  const [busy, setBusy] = useState(null); // ts of the backup currently being restored, if any
+  const [manualBackingUp, setManualBackingUp] = useState(false);
+
+  const load = () => {
+    supa.getState("season_preds_backups").then(b=>setSeasonBackups(b||[])).catch(()=>setSeasonBackups([]));
+    supa.getState("predictions_backups").then(b=>setPredBackups(b||[])).catch(()=>setPredBackups([]));
+  };
+  useEffect(()=>{ load(); },[]);
+
+  const fmtTs = (ts) => new Date(ts).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+
+  const doRestoreSeason = async (entry) => {
+    if(!window.confirm(`Restore season predictions from ${fmtTs(entry.ts)}${entry.label?` (${entry.label})`:""}?\n\nWhatever's there now will itself be backed up first, so this can be undone if needed.`)) return;
+    setBusy(entry.ts);
+    try{
+      const restored = await restoreSeasonPredsBackup(entry);
+      setSeasonPreds(restored);
+      toast_(`✅ Season predictions restored from ${fmtTs(entry.ts)}`);
+      load();
+    }catch(e){ toast_("Restore failed: "+e.message,"error"); }
+    setBusy(null);
+  };
+
+  const doRestorePreds = async (entry) => {
+    if(!window.confirm(`Restore ALL weekly predictions from ${fmtTs(entry.ts)}${entry.label?` (${entry.label})`:""}?\n\nThis affects every player's picks for every match week. Whatever's there now will itself be backed up first.`)) return;
+    setBusy(entry.ts);
+    try{
+      const restored = await restorePredictionsBackup(entry);
+      setPredictions(restored);
+      toast_(`✅ Weekly predictions restored from ${fmtTs(entry.ts)} (${(entry.rows||[]).length} rows)`);
+      load();
+    }catch(e){ toast_("Restore failed: "+e.message,"error"); }
+    setBusy(null);
+  };
+
+  const backupPredsNow = async () => {
+    setManualBackingUp(true);
+    const n = await backupPredictionsTable("manual");
+    setManualBackingUp(false);
+    toast_(n>0?`✅ Backed up ${n} prediction rows`:"Backup failed — check connection","ok");
+    load();
+  };
+
+  return(
+    <div>
+      <div style={{fontSize:12,color:"#64748B",marginBottom:12,lineHeight:1.6}}>
+        Snapshots are taken automatically before anything that could plausibly overwrite predictions —
+        a player submitting, an admin edit, or a bulk edit — so a mistake (or a bug) is a quick restore,
+        not a redo-everything scramble. Every restore backs up the current state first, so restoring is
+        itself always reversible.
+      </div>
+
+      <div style={{fontWeight:700,color:"#E2E8F0",fontSize:13,marginBottom:6}}>🏆 League Position Predictions</div>
+      {seasonBackups===null ? (
+        <div style={{fontSize:12,color:"#64748B",marginBottom:14}}>Loading…</div>
+      ) : seasonBackups.length===0 ? (
+        <div style={{fontSize:12,color:"#64748B",marginBottom:14,fontStyle:"italic"}}>No backups yet — one will appear here the first time a prediction is submitted or edited.</div>
+      ) : (
+        <div style={{marginBottom:14}}>
+          {seasonBackups.map(entry=>(
+            <div key={entry.ts} style={{display:"flex",alignItems:"center",gap:8,
+              background:"#0F172A",border:"1px solid #1E293B",borderRadius:8,
+              padding:"8px 10px",marginBottom:5}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12,color:"#CBD5E1",fontWeight:600}}>{fmtTs(entry.ts)}</div>
+                <div style={{fontSize:10,color:"#64748B"}}>{entry.label||""} · {Object.keys(entry.value||{}).length} player{Object.keys(entry.value||{}).length===1?"":"s"} in this snapshot</div>
+              </div>
+              <button onClick={()=>doRestoreSeason(entry)} disabled={busy===entry.ts}
+                style={{background:"#EF444422",border:"1px solid #EF4444",borderRadius:8,color:"#F87171",
+                  fontSize:11,fontWeight:700,padding:"6px 10px",cursor:busy?"default":"pointer",flexShrink:0,opacity:busy&&busy!==entry.ts?0.5:1}}>
+                {busy===entry.ts?"Restoring…":"↩ Restore"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+        <div style={{fontWeight:700,color:"#E2E8F0",fontSize:13}}>⚽ Weekly Predictions</div>
+        <button onClick={backupPredsNow} disabled={manualBackingUp}
+          style={{background:"#7C3AED22",border:"1px solid #7C3AED",borderRadius:8,color:"#A78BFA",
+            fontSize:11,fontWeight:700,padding:"5px 10px",cursor:manualBackingUp?"default":"pointer"}}>
+          {manualBackingUp?"Backing up…":"📸 Backup now"}
+        </button>
+      </div>
+      {predBackups===null ? (
+        <div style={{fontSize:12,color:"#64748B"}}>Loading…</div>
+      ) : predBackups.length===0 ? (
+        <div style={{fontSize:12,color:"#64748B",fontStyle:"italic"}}>No backups yet — one will appear here after the first daily snapshot, a bulk edit, or tapping "Backup now" above.</div>
+      ) : (
+        <div>
+          {predBackups.map(entry=>(
+            <div key={entry.ts} style={{display:"flex",alignItems:"center",gap:8,
+              background:"#0F172A",border:"1px solid #1E293B",borderRadius:8,
+              padding:"8px 10px",marginBottom:5}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12,color:"#CBD5E1",fontWeight:600}}>{fmtTs(entry.ts)}</div>
+                <div style={{fontSize:10,color:"#64748B"}}>{entry.label||""} · {(entry.rows||[]).length} rows</div>
+              </div>
+              <button onClick={()=>doRestorePreds(entry)} disabled={busy===entry.ts}
+                style={{background:"#EF444422",border:"1px solid #EF4444",borderRadius:8,color:"#F87171",
+                  fontSize:11,fontWeight:700,padding:"6px 10px",cursor:busy?"default":"pointer",flexShrink:0,opacity:busy&&busy!==entry.ts?0.5:1}}>
+                {busy===entry.ts?"Restoring…":"↩ Restore"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -5257,6 +5466,10 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
 
       <AdminGroup title="✏️ Edit Player Predictions" defaultOpen={false} accent="#7C3AED44">
         <HPLPredictionsEditor fixtures={fixtures} displayFixtures={displayFixtures} predictions={predictions} setPredictions={setPredictions} players={players} reveals={reveals} deadlines={deadlines} toast_={toast_}/>
+      </AdminGroup>
+
+      <AdminGroup title="🛟 Backups & Restore" defaultOpen={false} accent="#EF444444">
+        <DataSafetyPanel setSeasonPreds={setSeasonPreds} setPredictions={setPredictions} toast_={toast_}/>
       </AdminGroup>
 
       {/* ── SETUP ── collapsed */}
@@ -6519,7 +6732,16 @@ function SeasonAdminPanel({seasonActual, setSeasonActual, seasonPts, setSeasonPt
               <button style={{...S.bb,flex:1}} onClick={async()=>{
                 const teams=editPredText.split(",").map(t=>t.trim()).filter(Boolean);
                 if(teams.length!==20){toast_(`Need exactly 20 teams — got ${teams.length}`,"error");return;}
-                const updated={...seasonPreds,[editPlayer]:teams};
+                // Re-fetch the freshest server copy right before merging — same fix
+                // as the player-facing Submit button, and for the same reason: this
+                // admin tab's local seasonPreds can be stale if it's been open a
+                // while and a player submitted in the meantime. Merging against a
+                // stale local copy would silently wipe their entry out.
+                let latestPreds;
+                try{ latestPreds = await supa.getState("season_preds"); }catch{ latestPreds = null; }
+                const base=(latestPreds && typeof latestPreds==="object")?latestPreds:(seasonPreds||{});
+                await backupSeasonPreds(base, "before admin edit: "+editPlayer);
+                const updated={...base,[editPlayer]:teams};
                 setSeasonPreds(updated);
                 try{
                   await supa.setState("season_preds",updated);
@@ -6540,6 +6762,7 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
   const positionsLocked = positionDeadline && new Date(positionDeadline) <= new Date();
   const [draft, setDraft] = useState([...PL_TEAMS_2526].sort());
   const [submitted, setSubmitted] = useState(false);
+  const [editing, setEditing] = useState(false); // revising an already-submitted prediction, before the deadline
   const [draftSavedAt, setDraftSavedAt] = useState(null); // when the in-progress order was last autosaved
   const [draftSaving, setDraftSaving] = useState(false);
   const [justSwapped, setJustSwapped] = useState(null); // {a,b} indices — brief highlight after a swap
@@ -6619,12 +6842,16 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
 
   const handleSubmit = async () => {
     if (!me) { toast_("Please log in first","error"); return; }
-    if (submitted) return;
+    if (submitted && !editing) return; // already locked in and not currently revising it
     if (positionsLocked) { toast_("Position Predictions closed on "+new Date(positionDeadline).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}),"error"); return; }
     // Final review — show the full ranked list right in the confirmation itself,
-    // so this doubles as a last look before it's locked in for good.
+    // so this doubles as a last look before it's locked in (or re-locked in, if
+    // editing) for good.
     const reviewText = draft.map((team,i)=>`${i+1}. ${team}`).join("\n");
-    if (!window.confirm(`Submit your league prediction? This cannot be changed once submitted.\n\n${reviewText}`)) return;
+    const confirmMsg = editing
+      ? `Save your updated league prediction? You can keep editing until the deadline.\n\n${reviewText}`
+      : `Submit your league prediction? You'll be able to edit it again anytime before the deadline.\n\n${reviewText}`;
+    if (!window.confirm(confirmMsg)) return;
     // Re-fetch the freshest server copy right before merging — never trust the
     // locally-held seasonPreds state here, since it can be stale if this tab's been
     // open a while and other players submitted in the meantime. Merging against a
@@ -6632,9 +6859,11 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
     let latestPreds;
     try { latestPreds = await supa.getState("season_preds"); } catch { latestPreds = null; }
     const base = (latestPreds && typeof latestPreds==="object") ? latestPreds : (seasonPreds||{});
+    await backupSeasonPreds(base, editing?"before player edit":"before player submit");
     const newPreds = {...base, [me]: draft};
     setSeasonPreds(newPreds);
     setSubmitted(true);
+    setEditing(false); // back to the locked-in display, now showing the updated order
     // Save to localStorage immediately as backup
     try {
       saveAll_master({season_preds: newPreds});
@@ -6642,7 +6871,7 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
     // Save to Supabase
     try {
       await supa.setState("season_preds", newPreds);
-      toast_("League prediction saved! 🏆");
+      toast_(editing ? "Prediction updated! 🏆" : "League prediction saved! 🏆");
     } catch(e) {
       toast_("Saved locally — sync to server failed. Will retry next open.","error");
     }
@@ -6949,11 +7178,25 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
       {/* My prediction / entry form */}
       <div ref={entryRef}>
       {me ? (
-        submitted ? (
+        submitted && !editing ? (
           <div style={S.card}>
-            <div style={{...S.ct,color:"#34D399",marginBottom:6}}>
-              ✅ Your prediction is locked in
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+              <div style={{...S.ct,color:"#34D399"}}>
+                ✅ Your prediction is locked in
+              </div>
+              {!positionsLocked && !leagueRevealed && (
+                <button onClick={()=>setEditing(true)}
+                  style={{background:"#7C3AED22",border:"1px solid #7C3AED",borderRadius:8,
+                    color:"#A78BFA",fontSize:12,fontWeight:700,padding:"6px 12px",cursor:"pointer"}}>
+                  ✏️ Edit
+                </button>
+              )}
             </div>
+            {!positionsLocked && !leagueRevealed && (
+              <div style={{fontSize:11,color:"#64748B",marginBottom:10}}>
+                You can still change this anytime before {new Date(positionDeadline).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}.
+              </div>
+            )}
             {/* Column headers */}
             <div style={{display:"flex",alignItems:"center",gap:8,padding:"0 8px",marginBottom:4}}>
               <span style={{width:24,fontSize:10,color:"#334155",textAlign:"center"}}>#</span>
@@ -7011,13 +7254,14 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
           </div>
         ) : (
           <div style={S.card}>
-            <div style={{...S.ct,marginBottom:4}}>📝 Set Your Prediction</div>
+            <div style={{...S.ct,marginBottom:4}}>{editing?"✏️ Update Your Prediction":"📝 Set Your Prediction"}</div>
             <div style={{fontSize:12,color:"#64748B",marginBottom:6}}>
               Pick a team for each position, 1st to 20th. Choosing a team that's already placed
-              elsewhere just swaps the two — no need to clear anything first. Your order is saved
-              automatically as you go — come back and refine it anytime before submitting.
-              Once submitted it cannot be changed.
-              Closes {new Date(positionDeadline).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}.
+              elsewhere just swaps the two — no need to clear anything first.
+              {editing
+                ? " You can keep changing this right up until the deadline."
+                : " Your order is saved automatically as you go — come back and refine it anytime before submitting, and you can still edit it after submitting too, right up until the deadline."}
+              {" "}Closes {new Date(positionDeadline).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}.
             </div>
             {(draftSaving || draftSavedAt) && (
               <div style={{fontSize:11,color:draftSaving?"#F59E0B":"#34D399",marginBottom:10,display:"flex",alignItems:"center",gap:5}}>
@@ -7055,8 +7299,17 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
             })}
             <button style={{...S.bb,marginTop:14,padding:"16px",fontSize:16,fontWeight:800}}
               onClick={handleSubmit}>
-              🔒 Submit League Prediction
+              {editing?"💾 Save Changes":"🔒 Submit League Prediction"}
             </button>
+            {editing && (
+              <button
+                onClick={()=>{ setDraft([...(myPred||[])]); setEditing(false); }}
+                style={{width:"100%",marginTop:8,padding:"10px",background:"transparent",
+                  border:"1px solid #334155",borderRadius:10,color:"#94A3B8",
+                  fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                Cancel
+              </button>
+            )}
           </div>
         )
       ) : (
