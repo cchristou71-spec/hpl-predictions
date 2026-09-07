@@ -173,6 +173,20 @@ function rowsToPredictions(predRows) {
   return predictions;
 }
 
+// ── AUDIT LOG ────────────────────────────────────────────────────────────────
+// A per-week reveal/lock log with real timestamps and a reason — added after a
+// week showed as "Locked" to players two days before its actual deadline, and
+// the only diagnostic available was a single "last updated" time for the whole
+// reveals record, with no way to tell which week changed, when, or why. Every
+// place that flips a week's reveal/lock state now appends one line here.
+async function logRevealAction(week, action, source, who) {
+  try {
+    const existing = (await supa.getState("reveal_audit_log")) || [];
+    const entry = { ts: new Date().toISOString(), week: String(week), action, source, who: who||null };
+    await supa.setState("reveal_audit_log", [entry, ...existing].slice(0, 100));
+  } catch(e) { console.log("Reveal audit log failed (non-fatal):", e.message); }
+}
+
 // ── BACKUP & RESTORE ─────────────────────────────────────────────────────────
 // Lightweight safety net for the two things that turned out to be genuinely at
 // risk: league position predictions (a single shared blob, vulnerable to a
@@ -1805,7 +1819,10 @@ function App(){
         const wasManuallyUnlocked=manuallyUnlocked[mwNum];
         if(dl && !wasManuallyUnlocked){
           // Normal path: this week's own deadline auto-locks it as usual.
-          if(new Date(dl)<=now){ nr[mwNum]=true; patch[mwNum]=true; changed=true; }
+          if(new Date(dl)<=now){
+            nr[mwNum]=true; patch[mwNum]=true; changed=true;
+            logRevealAction(mwNum,"locked","auto-deadline");
+          }
           return;
         }
         // Safety-net path — covers two cases where nothing would otherwise ever
@@ -1829,6 +1846,7 @@ function App(){
         );
         if(kickoffPassed || allPredicted){
           nr[mwNum]=true; patch[mwNum]=true; changed=true;
+          logRevealAction(mwNum,"locked",kickoffPassed?"auto-kickoff":"auto-all-predicted");
         }
       });
       if(changed){
@@ -2298,7 +2316,7 @@ function App(){
           saveAll={saveAll} toast_={toast_} setTab={setTab} seasonLabel={seasonLabel}
         />}
         {tab==="league"&&<League {...props} me={me}/>}
-        {tab==="admin"&&<Admin {...props} adminPws={adminPws} setAdminPws={setAdminPws} positionDeadline={positionDeadline} setPositionDeadline={setPositionDeadline} setFixtureDeadlines={setFixtureDeadlines} publicRevealTimes={publicRevealTimes} setPublicRevealTimes={setPublicRevealTimes} fixtures={fixtures} displayFixtures={displayFixtures} demoMode={demoMode} setDemoMode={setDemoMode} leagueRevealed={leagueRevealed} setLeagueRevealed={setLeagueRevealed} setFixtures={setFixtures} predictions={predictions} setPredictions={setPredictions} jokers={jokers} setJokers={setJokers} pins={pins} setPins={setPins} reveals={reveals} setReveals={setReveals} deadlines={deadlines} setDeadlines={setDeadlines} manuallyUnlocked={manuallyUnlocked} setManuallyUnlocked={setManuallyUnlocked} players={players} setPlayers={setPlayers} admin={admin} setAdmin={setAdmin} toast_={toast_} saveAll={saveAll} syncStatus={syncStatus} setSupaLoading={setSupaLoading} seasonActual={seasonActual} setSeasonActual={setSeasonActual} seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds} seasonPts={seasonPts} setSeasonPts={setSeasonPts} seasonGP={seasonGP} standingsSource={standingsSource} mwOverrides={mwOverrides} setMwOverrides={setMwOverrides} entryFees={entryFees} setEntryFees={setEntryFees} seasonLabel={seasonLabel} setSeasonLabel={setSeasonLabel} emails={emails} setEmails={setEmails} onForceRefresh={()=>{setRefreshStatus("loading");liveRefresh(fixtures, mwOverrides).then(({fixtures:nFx,updated,dateChanges,fixturesBuilt})=>{if(fixturesBuilt||updated>0||dateChanges>0)setFixtures(nFx);setRefreshStatus({updated,dateChanges});setTimeout(()=>setRefreshStatus(null),4000);toast_(fixturesBuilt?`✅ Fixtures loaded from ESPN! ${Object.keys(nFx).length} match weeks`:`ESPN refresh: ${updated} results, ${dateChanges} date changes`);}).catch(e=>{setRefreshStatus(null);toast_("ESPN refresh failed: "+e.message,"error");});}}/>}
+        {tab==="admin"&&<Admin {...props} me={me} adminPws={adminPws} setAdminPws={setAdminPws} positionDeadline={positionDeadline} setPositionDeadline={setPositionDeadline} setFixtureDeadlines={setFixtureDeadlines} publicRevealTimes={publicRevealTimes} setPublicRevealTimes={setPublicRevealTimes} fixtures={fixtures} displayFixtures={displayFixtures} demoMode={demoMode} setDemoMode={setDemoMode} leagueRevealed={leagueRevealed} setLeagueRevealed={setLeagueRevealed} setFixtures={setFixtures} predictions={predictions} setPredictions={setPredictions} jokers={jokers} setJokers={setJokers} pins={pins} setPins={setPins} reveals={reveals} setReveals={setReveals} deadlines={deadlines} setDeadlines={setDeadlines} manuallyUnlocked={manuallyUnlocked} setManuallyUnlocked={setManuallyUnlocked} players={players} setPlayers={setPlayers} admin={admin} setAdmin={setAdmin} toast_={toast_} saveAll={saveAll} syncStatus={syncStatus} setSupaLoading={setSupaLoading} seasonActual={seasonActual} setSeasonActual={setSeasonActual} seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds} seasonPts={seasonPts} setSeasonPts={setSeasonPts} seasonGP={seasonGP} standingsSource={standingsSource} mwOverrides={mwOverrides} setMwOverrides={setMwOverrides} entryFees={entryFees} setEntryFees={setEntryFees} seasonLabel={seasonLabel} setSeasonLabel={setSeasonLabel} emails={emails} setEmails={setEmails} onForceRefresh={()=>{setRefreshStatus("loading");liveRefresh(fixtures, mwOverrides).then(({fixtures:nFx,updated,dateChanges,fixturesBuilt})=>{if(fixturesBuilt||updated>0||dateChanges>0)setFixtures(nFx);setRefreshStatus({updated,dateChanges});setTimeout(()=>setRefreshStatus(null),4000);toast_(fixturesBuilt?`✅ Fixtures loaded from ESPN! ${Object.keys(nFx).length} match weeks`:`ESPN refresh: ${updated} results, ${dateChanges} date changes`);}).catch(e=>{setRefreshStatus(null);toast_("ESPN refresh failed: "+e.message,"error");});}}/>}
       </main>
     </div>
   );
@@ -4849,16 +4867,25 @@ function HPLPredictionsEditor({fixtures, displayFixtures, predictions, setPredic
 function DataSafetyPanel({setSeasonPreds, setPredictions, toast_}){
   const [seasonBackups, setSeasonBackups] = useState(null); // null = not loaded yet
   const [predBackups, setPredBackups] = useState(null);
+  const [revealLog, setRevealLog] = useState(null);
   const [busy, setBusy] = useState(null); // ts of the backup currently being restored, if any
   const [manualBackingUp, setManualBackingUp] = useState(false);
 
   const load = () => {
     supa.getState("season_preds_backups").then(b=>setSeasonBackups(b||[])).catch(()=>setSeasonBackups([]));
     supa.getState("predictions_backups").then(b=>setPredBackups(b||[])).catch(()=>setPredBackups([]));
+    supa.getState("reveal_audit_log").then(b=>setRevealLog(b||[])).catch(()=>setRevealLog([]));
   };
   useEffect(()=>{ load(); },[]);
 
   const fmtTs = (ts) => new Date(ts).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+
+  const SOURCE_LABELS = {
+    "manual-admin": "👤 Admin tap",
+    "auto-deadline": "⏰ Deadline passed",
+    "auto-kickoff": "⚽ Kickoff reached",
+    "auto-all-predicted": "✅ Everyone predicted",
+  };
 
   const doRestoreSeason = async (entry) => {
     if(!window.confirm(`Restore season predictions from ${fmtTs(entry.ts)}${entry.label?` (${entry.label})`:""}?\n\nWhatever's there now will itself be backed up first, so this can be undone if needed.`)) return;
@@ -4957,12 +4984,46 @@ function DataSafetyPanel({setSeasonPreds, setPredictions, toast_}){
           ))}
         </div>
       )}
+
+      <div style={{fontWeight:700,color:"#E2E8F0",fontSize:13,marginBottom:6,marginTop:8}}>📋 Reveal/Lock History</div>
+      <div style={{fontSize:11,color:"#64748B",marginBottom:10}}>
+        Every time a match week gets locked or unlocked, with when and why — added so
+        "why did this happen?" has a real answer next time, instead of just a single
+        last-updated time for the whole record.
+      </div>
+      {revealLog===null ? (
+        <div style={{fontSize:12,color:"#64748B"}}>Loading…</div>
+      ) : revealLog.length===0 ? (
+        <div style={{fontSize:12,color:"#64748B",fontStyle:"italic"}}>No history yet — entries will appear here the next time a week locks or unlocks.</div>
+      ) : (
+        <div>
+          {revealLog.map((entry,i)=>(
+            <div key={entry.ts+i} style={{display:"flex",alignItems:"center",gap:8,
+              background:"#0F172A",border:"1px solid #1E293B",borderRadius:8,
+              padding:"7px 10px",marginBottom:4}}>
+              <span style={{fontSize:12,fontWeight:800,color:"#7C3AED",width:34,textAlign:"center",flexShrink:0}}>MW{entry.week}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:11,color:"#CBD5E1"}}>
+                  {entry.action==="locked"?"🔒 Locked/revealed":"🔓 Unlocked"} — {SOURCE_LABELS[entry.source]||entry.source}{entry.who?` (${entry.who})`:""}
+                </div>
+                <div style={{fontSize:10,color:"#64748B"}}>{fmtTs(entry.ts)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,jokers,setJokers,pins,setPins,reveals,setReveals,publicReveals,deadlines,setDeadlines,manuallyUnlocked,setManuallyUnlocked,fixtureDeadlines,setFixtureDeadlines,publicRevealTimes,setPublicRevealTimes,positionDeadline,setPositionDeadline,adminPws,setAdminPws,players,setPlayers,admin,setAdmin,toast_,saveAll,syncStatus,setSupaLoading,seasonActual,setSeasonActual,seasonPreds,setSeasonPreds,seasonPts,setSeasonPts,seasonGP,standingsSource,mwOverrides,setMwOverrides,entryFees,setEntryFees,onForceRefresh,seasonLabel,setSeasonLabel,emails,setEmails,demoMode,setDemoMode,leagueRevealed,setLeagueRevealed}){
+function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,jokers,setJokers,pins,setPins,reveals,setReveals,publicReveals,deadlines,setDeadlines,manuallyUnlocked,setManuallyUnlocked,fixtureDeadlines,setFixtureDeadlines,publicRevealTimes,setPublicRevealTimes,positionDeadline,setPositionDeadline,adminPws,setAdminPws,players,setPlayers,admin,setAdmin,toast_,saveAll,syncStatus,setSupaLoading,seasonActual,setSeasonActual,seasonPreds,setSeasonPreds,seasonPts,setSeasonPts,seasonGP,standingsSource,mwOverrides,setMwOverrides,entryFees,setEntryFees,onForceRefresh,seasonLabel,setSeasonLabel,emails,setEmails,demoMode,setDemoMode,leagueRevealed,setLeagueRevealed,me}){
   const[pw,setPw]=useState("");
+  // Who's acting as admin this session, for the audit log — reuses whichever player
+  // identity they've already selected elsewhere in the app (the same "who's
+  // predicting?" name), rather than asking again. Admin access itself is just a
+  // shared password with no individual accounts, so this is the only identity signal
+  // available; if nobody's selected a player name yet, manual actions just log with
+  // no name attached, same as before.
   const[ew,setEw]=useState(()=>{
     const today=new Date(); today.setHours(0,0,0,0);
     const todayMs=today.getTime();
@@ -5414,6 +5475,7 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
                   const nmu={...manuallyUnlocked,[ew]:true};
                   setManuallyUnlocked(nmu);
                   saveMapPatch("manually_unlocked",{[ew]:true}).catch(console.error);
+                  logRevealAction(ew,"unlocked","manual-admin",me);
                   toast_("MW"+ew+" unlocked — predictions open. Will auto-lock again at kickoff of the first fixture, or sooner if everyone finishes predicting.");
                   saveAll({rv:nr}, {rv:{[ew]:nowRevealed}});
                 } else {
@@ -5421,6 +5483,7 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
                   const nmu={...manuallyUnlocked}; delete nmu[ew];
                   setManuallyUnlocked(nmu);
                   saveMapPatch("manually_unlocked",{[ew]:undefined}).catch(console.error);
+                  logRevealAction(ew,"locked","manual-admin",me);
                   toast_("MW"+ew+" locked — predictions revealed");
                   saveAll({rv:nr}, {rv:{[ew]:nowRevealed}});
                 }
