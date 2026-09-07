@@ -5393,6 +5393,18 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
               fontSize:15,fontWeight:800}}
               onClick={()=>{
                 const nowRevealed = !safeReveals[ew];
+                // Warn if this locks/reveals a week whose own deadline hasn't actually
+                // passed yet — added after a week got stuck showing "Locked" to players
+                // two days before its real deadline, most likely from an early tap here
+                // that was hard to spot afterwards since nothing ever auto-reverts it.
+                if(nowRevealed){
+                  const dl=deadlines[ew];
+                  const deadlinePassed = dl && new Date(dl)<=new Date();
+                  if(!deadlinePassed){
+                    const dlText = dl ? new Date(dl).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) : "no deadline set";
+                    if(!window.confirm(`MW${ew}'s deadline hasn't passed yet (${dlText}). Locking/revealing it now will show players "Locked" and hide their ability to predict early — before you intended. Continue anyway?`)) return;
+                  }
+                }
                 const nr={...reveals,[ew]:nowRevealed};
                 setReveals(nr);
                 if(!nowRevealed){
