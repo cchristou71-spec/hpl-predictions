@@ -633,14 +633,21 @@ async function liveRefresh(fixtures, mwOverrides) {
         // Same rigorous "genuinely finished" check used by the regular live-score
         // refresh below — a bare state==="post" isn't trustworthy enough on its own
         // (ESPN's live feed can occasionally report this prematurely mid-match); also
-        // require the explicit completed flag or unambiguous full-time wording. This
-        // was tightened after a report of a 0-0 briefly showing as final while a
-        // second-half game was still being played (the regular 3-minute refresh later
-        // corrected it, but this closes the gap for the one-time fixture bootstrap too).
+        // require the explicit completed flag or unambiguous full-time wording.
+        // Excludes half-time explicitly: "halftime" contains the substring "ft", which
+        // the original version of this check (and the main one below) matched via a
+        // bare .includes("ft") — silently treating half-time as full-time and locking
+        // in the half-time score as final. That was the actual bug behind two separate
+        // mid-match "0-0 shown as final" reports (Coventry v Hull, Spurs v Everton).
         const statusDescBoot = (ev.status?.type?.description||ev.status?.type?.name||"").toLowerCase();
-        const isFTBoot = statusDescBoot.includes("full time") || statusDescBoot.includes("final") ||
-          statusDescBoot.includes("ft") || statusDescBoot.includes("aet") ||
-          statusDescBoot.includes("full-time") || statusDescBoot.includes("ended");
+        const isHalftimeBoot = statusDescBoot.includes("halftime") || statusDescBoot.includes("half-time") ||
+          statusDescBoot.includes("half time") || ev.status?.type?.name === "STATUS_HALFTIME";
+        const isFTBoot = !isHalftimeBoot && (
+          statusDescBoot.includes("full time") || statusDescBoot.includes("final") ||
+          statusDescBoot.includes("aet") ||
+          statusDescBoot.includes("full-time") || statusDescBoot.includes("ended") ||
+          ev.status?.type?.name === "STATUS_FULL_TIME" || ev.status?.type?.name === "STATUS_FINAL"
+        );
         const completed = ev.status?.type?.completed === true || isFTBoot;
         const hasScores = homeComp.score !== null && homeComp.score !== undefined && homeComp.score !== "";
         let result = null;
@@ -759,9 +766,20 @@ async function liveRefresh(fixtures, mwOverrides) {
       const hasScores = homeComp.score !== null && homeComp.score !== undefined && 
                         awayComp.score !== null && awayComp.score !== undefined &&
                         homeComp.score !== "" && awayComp.score !== "";
-      const isFT = statusDesc.includes("full time") || statusDesc.includes("final") || 
-                   statusDesc.includes("ft") || statusDesc.includes("aet") ||
-                   statusDesc.includes("full-time") || statusDesc.includes("ended");
+      // Half-time detection — checked *before* isFT below, because "halftime" contains
+      // the substring "ft", which was silently matching the old bare .includes("ft")
+      // check and causing a half-time score to be locked in as if the match had
+      // finished (the actual bug behind two separate reports: Coventry v Hull and
+      // Spurs v Everton both showed a "final" scoreline mid-match, always at exactly
+      // the half-time score).
+      const isHalftime = statusDesc.includes("halftime") || statusDesc.includes("half-time") ||
+        statusDesc.includes("half time") || ev.status?.type?.name === "STATUS_HALFTIME";
+      const isFT = !isHalftime && (
+        statusDesc.includes("full time") || statusDesc.includes("final") ||
+        statusDesc.includes("aet") ||
+        statusDesc.includes("full-time") || statusDesc.includes("ended") ||
+        ev.status?.type?.name === "STATUS_FULL_TIME" || ev.status?.type?.name === "STATUS_FINAL"
+      );
       // Postponed/cancelled/TBC — ESPN flags these via status name/description rather
       // than just omitting the event. Detected separately from "finished" so a
       // postponed fixture doesn't get mistaken for either an on-schedule game or a
