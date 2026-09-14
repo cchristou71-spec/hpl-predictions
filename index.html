@@ -173,16 +173,47 @@ function rowsToPredictions(predRows) {
   return predictions;
 }
 
+// A short, stable-per-browser fingerprint — persists across reloads on the same
+// device (stored in localStorage under its own key), but is different for every
+// other device/browser. Not full device tracking, just enough to tell "same device,
+// different selected name" apart from "a genuinely different device" — the exact gap
+// that made the 9 Sept incident unresolvable (the log could name a player, but not
+// which physical device the tap came from).
+function getDeviceFingerprint(){
+  try{
+    let id = localStorage.getItem("hpl_device_id");
+    if(!id){
+      id = Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4);
+      localStorage.setItem("hpl_device_id", id);
+    }
+    const ua = navigator.userAgent || "";
+    let hint = "Unknown";
+    if(/iPhone|iPad/.test(ua)) hint = "iOS";
+    else if(/Android/.test(ua)) hint = "Android";
+    else if(/Macintosh/.test(ua)) hint = "Mac";
+    else if(/Windows/.test(ua)) hint = "Windows";
+    if(/Chrome/.test(ua)) hint += " Chrome";
+    else if(/Safari/.test(ua)) hint += " Safari";
+    else if(/Firefox/.test(ua)) hint += " Firefox";
+    return { deviceId: id, deviceHint: hint };
+  }catch(e){ return { deviceId: null, deviceHint: null }; }
+}
+
 // ── AUDIT LOG ────────────────────────────────────────────────────────────────
 // A per-week reveal/lock log with real timestamps and a reason — added after a
 // week showed as "Locked" to players two days before its actual deadline, and
 // the only diagnostic available was a single "last updated" time for the whole
 // reveals record, with no way to tell which week changed, when, or why. Every
 // place that flips a week's reveal/lock state now appends one line here.
-async function logRevealAction(week, action, source, who) {
+// Also captures a per-device fingerprint automatically (see getDeviceFingerprint) —
+// added after a second incident where the logged player name couldn't be confirmed
+// (they denied it), and there was no way to tell whether it was really their device
+// or someone else's device with their name still selected.
+async function logRevealAction(week, action, source, who, path) {
   try {
+    const {deviceId, deviceHint} = getDeviceFingerprint();
     const existing = (await supa.getState("reveal_audit_log")) || [];
-    const entry = { ts: new Date().toISOString(), week: String(week), action, source, who: who||null };
+    const entry = { ts: new Date().toISOString(), week: String(week), action, source, who: who||null, deviceId, deviceHint, path: path||null };
     await supa.setState("reveal_audit_log", [entry, ...existing].slice(0, 100));
   } catch(e) { console.log("Reveal audit log failed (non-fatal):", e.message); }
 }
@@ -5005,9 +5036,15 @@ function DataSafetyPanel({setSeasonPreds, setPredictions, toast_}){
 
       <div style={{fontWeight:700,color:"#E2E8F0",fontSize:13,marginBottom:6,marginTop:8}}>📋 Reveal/Lock History</div>
       <div style={{fontSize:11,color:"#64748B",marginBottom:10}}>
-        Every time a match week gets locked or unlocked, with when and why — added so
-        "why did this happen?" has a real answer next time, instead of just a single
-        last-updated time for the whole record.
+        Every time a match week gets locked or unlocked, with when, why, and which device it
+        came from (a short per-browser code, shown after each entry — the same code appearing
+        twice means the same device, even if a different player name was selected each time).
+        Since admin access has no individual logins, this is the closest thing to knowing whose
+        tap it actually was; the name alone couldn't settle that on its own last time. Manual
+        actions also show a "session path" — every week Admin's default view showed during that
+        visit, e.g. "MW4 → MW5 (settled on MW5 12s before this tap)" — so it's immediately
+        visible if the screen had quietly moved to a different week just before the tap, rather
+        than needing to reconstruct that after the fact.
       </div>
       {revealLog===null ? (
         <div style={{fontSize:12,color:"#64748B"}}>Loading…</div>
@@ -5024,7 +5061,16 @@ function DataSafetyPanel({setSeasonPreds, setPredictions, toast_}){
                 <div style={{fontSize:11,color:"#CBD5E1"}}>
                   {entry.action==="locked"?"🔒 Locked/revealed":"🔓 Unlocked"} — {SOURCE_LABELS[entry.source]||entry.source}{entry.who?` (${entry.who})`:""}
                 </div>
-                <div style={{fontSize:10,color:"#64748B"}}>{fmtTs(entry.ts)}</div>
+                <div style={{fontSize:10,color:"#64748B"}}>
+                  {fmtTs(entry.ts)}
+                  {entry.deviceHint && <span> · {entry.deviceHint}</span>}
+                  {entry.deviceId && <span> · device {entry.deviceId.slice(-6)}</span>}
+                </div>
+                {entry.path && (
+                  <div style={{fontSize:10,color:"#F59E0B",marginTop:2,fontStyle:"italic"}}>
+                    Session path: {entry.path}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -5076,6 +5122,16 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
     const cur=computeCurrentMW(deadlines, displayFixtures||fixtures);
     if(cur) setEw(cur);
   },[deadlines]);
+  // Records every value `ew` has held during this session, with when — so a lock/
+  // unlock action's log entry can show the actual path leading up to it (e.g. "opened
+  // on MW4, silently corrected to MW5 two seconds later, then locked") instead of just
+  // the single end state. This is what would have settled the "was this really MW4 the
+  // whole time, or did it change underneath them?" question immediately, rather than
+  // needing a from-scratch replication to work it out after the fact.
+  const ewHistoryRef=React.useRef([]);
+  useEffect(()=>{
+    ewHistoryRef.current=[...ewHistoryRef.current,{ew,ts:Date.now()}].slice(-8);
+  },[ew]);
   const[newPw1,setNewPw1]=useState('');
   const[newPw2,setNewPw2]=useState('');
   const[managingAdmins,setManagingAdmins]=useState(false);
@@ -5472,10 +5528,28 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
               fontSize:15,fontWeight:800}}
               onClick={()=>{
                 const nowRevealed = !safeReveals[ew];
+                // Summarize this session's ew history into something compact and
+                // readable for the log — e.g. "MW4 → MW5 (auto, 2s before this tap)"
+                // makes it immediately obvious if the displayed week had just silently
+                // changed right before the click, rather than needing a from-scratch
+                // replication to work that out after the fact.
+                const hist=ewHistoryRef.current;
+                let path=null;
+                if(hist.length>1){
+                  const distinct=[];
+                  hist.forEach(h=>{ if(distinct.length===0||distinct[distinct.length-1].ew!==h.ew) distinct.push(h); });
+                  path=distinct.map(h=>`MW${h.ew}`).join(" → ");
+                  const last=distinct[distinct.length-1];
+                  if(distinct.length>1 && last){
+                    const secsAgo=Math.round((Date.now()-last.ts)/1000);
+                    path+=` (settled on MW${last.ew} ${secsAgo}s before this tap)`;
+                  }
+                }
                 // Warn if this locks/reveals a week whose own deadline hasn't actually
                 // passed yet — added after a week got stuck showing "Locked" to players
                 // two days before its real deadline, most likely from an early tap here
                 // that was hard to spot afterwards since nothing ever auto-reverts it.
+                let earlyLockDlText=null; // set below if this is an early lock — used for the email alert
                 if(nowRevealed){
                   const dl=deadlines[ew];
                   const deadlinePassed = dl && new Date(dl)<=new Date();
@@ -5488,6 +5562,7 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
                     // number forces a genuine, deliberate check rather than a reflexive OK.
                     const typed=window.prompt(`⚠️ WRONG WEEK? MW${ew}'s deadline isn't until ${dlText} — that's still to come.\n\nLocking it now shows "Locked" to players and blocks predicting, before you meant it to.\n\nIf you really mean to lock MW${ew} early, type ${ew} to confirm:`);
                     if(typed===null || typed.trim()!==String(ew)) return;
+                    earlyLockDlText=dlText; // confirmed anyway — flag it for the email alert below
                   }
                 }
                 const nr={...reveals,[ew]:nowRevealed};
@@ -5499,7 +5574,7 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
                   const nmu={...manuallyUnlocked,[ew]:true};
                   setManuallyUnlocked(nmu);
                   saveMapPatch("manually_unlocked",{[ew]:true}).catch(console.error);
-                  logRevealAction(ew,"unlocked","manual-admin",me);
+                  logRevealAction(ew,"unlocked","manual-admin",me,path);
                   toast_("MW"+ew+" unlocked — predictions open. Will auto-lock again at kickoff of the first fixture, or sooner if everyone finishes predicting.");
                   saveAll({rv:nr}, {rv:{[ew]:nowRevealed}});
                 } else {
@@ -5507,9 +5582,21 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
                   const nmu={...manuallyUnlocked}; delete nmu[ew];
                   setManuallyUnlocked(nmu);
                   saveMapPatch("manually_unlocked",{[ew]:undefined}).catch(console.error);
-                  logRevealAction(ew,"locked","manual-admin",me);
+                  logRevealAction(ew,"locked","manual-admin",me,path);
                   toast_("MW"+ew+" locked — predictions revealed");
                   saveAll({rv:nr}, {rv:{[ew]:nowRevealed}});
+                  // Immediate email alert for an early lock specifically — the one case
+                  // worth interrupting an inbox for, since it silently blocks players from
+                  // predicting before anyone intended. Fire-and-forget; never blocks the
+                  // actual lock action, which has already completed above.
+                  if(earlyLockDlText){
+                    const {deviceId,deviceHint}=getDeviceFingerprint();
+                    fetch(`${SUPA_URL}/functions/v1/early-lock-alert`,{
+                      method:"POST",
+                      headers:{apikey:SUPA_KEY,Authorization:`Bearer ${SUPA_KEY}`,"Content-Type":"application/json"},
+                      body:JSON.stringify({week:ew,action:"locked",who:me,deviceHint,deviceId,path,deadlineText:earlyLockDlText}),
+                    }).catch(()=>{}); // best-effort — a failed alert email never blocks or undoes the lock itself
+                  }
                 }
               }}>
               {safeReveals[ew]?"✓ Revealed — tap to hide":"🔴 REVEAL NOW & LOCK PREDICTIONS"}
