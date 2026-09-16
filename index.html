@@ -773,6 +773,7 @@ async function liveRefresh(fixtures, mwOverrides) {
 
     const newFx = JSON.parse(JSON.stringify(fixtures));
     let updated = 0, dateChanges = 0;
+    const unmatchedEvents = []; // events that didn't match any existing fixture — candidates for a brand-new match week (see below)
 
     events.forEach(ev => {
       const comps = ev.competitions?.[0];
@@ -825,9 +826,11 @@ async function liveRefresh(fixtures, mwOverrides) {
       const evDate = evDateObj ? evDateObj.toLocaleDateString("en-CA",{timeZone:"Europe/London"}) : null; // YYYY-MM-DD in BST
       const evTime = evDateObj ? evDateObj.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Europe/London"}) : null;
 
+      let matchedFixture = false;
       Object.values(newFx).forEach(mwList => {
         mwList.forEach(fx => {
           if (norm(fx.home) !== home || norm(fx.away) !== away) return;
+          matchedFixture = true;
 
           if (fullyFinished) {
             const h = parseInt(homeComp.score);
@@ -879,7 +882,69 @@ async function liveRefresh(fixtures, mwOverrides) {
           }
         });
       });
+
+      // Nothing in the currently-known fixture list matched this event at all — a
+      // genuinely new game ESPN has published that this app has never seen before
+      // (e.g. a match week that didn't exist yet at the original season build, like
+      // the round straight after an international break). Collected here and turned
+      // into a brand-new match week below, rather than silently discarded — this was
+      // the actual gap that meant even a normal "Refresh Now" could never discover a
+      // new match week, only the destructive full rebuild could.
+      if (!matchedFixture && evDate && evTime && !isPostponed) {
+        unmatchedEvents.push({ home, away, evDate, evTime, evDateObj });
+      }
     });
+
+    // ── DISCOVER BRAND-NEW MATCH WEEKS ──────────────────────────────────────
+    // Group any unmatched (genuinely new) fixtures into fresh match weeks, 10 games
+    // each, continuing on from whatever the highest existing week number is. This
+    // only ADDS — it never touches or clears any existing week's fixtures, results,
+    // or deadlines, unlike "Rebuild from ESPN".
+    const newlyDiscoveredWeeks = [];
+    if (unmatchedEvents.length > 0) {
+      const existingMwNums = Object.keys(newFx).map(Number).filter(n=>!isNaN(n));
+      let nextMw = existingMwNums.length ? Math.max(...existingMwNums) + 1 : 1;
+      const sorted = [...unmatchedEvents].sort((a,b) => a.evDateObj - b.evDateObj);
+      const GAMES_PER_MW = 10;
+      for (let i = 0; i < sorted.length; i += GAMES_PER_MW) {
+        const chunk = sorted.slice(i, i + GAMES_PER_MW);
+        if (!chunk.length || nextMw > 38) continue;
+        newFx[nextMw] = chunk.map((u, idx) => ({
+          id: `${nextMw}-${idx}`, mw: nextMw, home: u.home, away: u.away,
+          date: u.evDate, time: u.evTime, currentDate: u.evDate, currentTime: u.evTime,
+          result: null,
+        }));
+        newlyDiscoveredWeeks.push(nextMw);
+        dateChanges += chunk.length;
+        nextMw++;
+      }
+    }
+
+    if (newlyDiscoveredWeeks.length > 0) {
+      // Persist immediately — everything else in this function's ongoing (non-bootstrap)
+      // path only ever updated the calling browser's own local state, never the shared
+      // Supabase record, so a newly-discovered week would otherwise only be visible on
+      // whichever single device happened to trigger the refresh that found it.
+      supa.setState("live_fixtures", newFx).catch(e => console.log("live_fixtures save failed:", e.message));
+      // Auto-set a deadline for each new week (Wed 20:00 before its first game — same
+      // rule as the season build) — but only if that week doesn't already have one, so
+      // this never overwrites a deadline admin has already set or corrected.
+      supa.getState("deadlines").then(existingDl => {
+        const dl = existingDl || {};
+        const newDl = {};
+        newlyDiscoveredWeeks.forEach(mwNum => {
+          if (dl[mwNum]) return;
+          const fxs = newFx[mwNum];
+          const firstDate = fxs.reduce((min, fx) => fx.date < min ? fx.date : min, fxs[0].date);
+          const d = new Date(firstDate + "T12:00:00");
+          const day = d.getDay();
+          const daysBack = ((day + 4) % 7);
+          d.setDate(d.getDate() - daysBack);
+          newDl[mwNum] = `${d.toLocaleDateString("en-CA")}T20:00`;
+        });
+        if (Object.keys(newDl).length > 0) saveMapPatch("deadlines", newDl).catch(()=>{});
+      }).catch(()=>{});
+    }
 
     // Fetch current PL standings — multiple endpoints with fallback
     let standings = null;
@@ -1035,7 +1100,7 @@ async function liveRefresh(fixtures, mwOverrides) {
     if (!standings) console.log("⚠️ All standings methods failed");
     // standingsPts populated below
 
-    return { fixtures: newFx, updated, dateChanges, standings, standingsPts, standingsGP };
+    return { fixtures: newFx, updated, dateChanges, standings, standingsPts, standingsGP, newlyDiscoveredWeeks };
   } catch(e) {
     console.log("ESPN refresh error:", e.message);
     return liveRefreshFallback(fixtures);
@@ -2365,7 +2430,7 @@ function App(){
           saveAll={saveAll} toast_={toast_} setTab={setTab} seasonLabel={seasonLabel}
         />}
         {tab==="league"&&<League {...props} me={me}/>}
-        {tab==="admin"&&<Admin {...props} me={me} adminPws={adminPws} setAdminPws={setAdminPws} positionDeadline={positionDeadline} setPositionDeadline={setPositionDeadline} setFixtureDeadlines={setFixtureDeadlines} publicRevealTimes={publicRevealTimes} setPublicRevealTimes={setPublicRevealTimes} fixtures={fixtures} displayFixtures={displayFixtures} demoMode={demoMode} setDemoMode={setDemoMode} leagueRevealed={leagueRevealed} setLeagueRevealed={setLeagueRevealed} setFixtures={setFixtures} predictions={predictions} setPredictions={setPredictions} jokers={jokers} setJokers={setJokers} pins={pins} setPins={setPins} reveals={reveals} setReveals={setReveals} deadlines={deadlines} setDeadlines={setDeadlines} manuallyUnlocked={manuallyUnlocked} setManuallyUnlocked={setManuallyUnlocked} players={players} setPlayers={setPlayers} admin={admin} setAdmin={setAdmin} toast_={toast_} saveAll={saveAll} syncStatus={syncStatus} setSupaLoading={setSupaLoading} seasonActual={seasonActual} setSeasonActual={setSeasonActual} seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds} seasonPts={seasonPts} setSeasonPts={setSeasonPts} seasonGP={seasonGP} standingsSource={standingsSource} mwOverrides={mwOverrides} setMwOverrides={setMwOverrides} entryFees={entryFees} setEntryFees={setEntryFees} seasonLabel={seasonLabel} setSeasonLabel={setSeasonLabel} emails={emails} setEmails={setEmails} onForceRefresh={()=>{setRefreshStatus("loading");liveRefresh(fixtures, mwOverrides).then(({fixtures:nFx,updated,dateChanges,fixturesBuilt})=>{if(fixturesBuilt||updated>0||dateChanges>0)setFixtures(nFx);setRefreshStatus({updated,dateChanges});setTimeout(()=>setRefreshStatus(null),4000);toast_(fixturesBuilt?`✅ Fixtures loaded from ESPN! ${Object.keys(nFx).length} match weeks`:`ESPN refresh: ${updated} results, ${dateChanges} date changes`);}).catch(e=>{setRefreshStatus(null);toast_("ESPN refresh failed: "+e.message,"error");});}}/>}
+        {tab==="admin"&&<Admin {...props} me={me} adminPws={adminPws} setAdminPws={setAdminPws} positionDeadline={positionDeadline} setPositionDeadline={setPositionDeadline} setFixtureDeadlines={setFixtureDeadlines} publicRevealTimes={publicRevealTimes} setPublicRevealTimes={setPublicRevealTimes} fixtures={fixtures} displayFixtures={displayFixtures} demoMode={demoMode} setDemoMode={setDemoMode} leagueRevealed={leagueRevealed} setLeagueRevealed={setLeagueRevealed} setFixtures={setFixtures} predictions={predictions} setPredictions={setPredictions} jokers={jokers} setJokers={setJokers} pins={pins} setPins={setPins} reveals={reveals} setReveals={setReveals} deadlines={deadlines} setDeadlines={setDeadlines} manuallyUnlocked={manuallyUnlocked} setManuallyUnlocked={setManuallyUnlocked} players={players} setPlayers={setPlayers} admin={admin} setAdmin={setAdmin} toast_={toast_} saveAll={saveAll} syncStatus={syncStatus} setSupaLoading={setSupaLoading} seasonActual={seasonActual} setSeasonActual={setSeasonActual} seasonPreds={seasonPreds} setSeasonPreds={setSeasonPreds} seasonPts={seasonPts} setSeasonPts={setSeasonPts} seasonGP={seasonGP} standingsSource={standingsSource} mwOverrides={mwOverrides} setMwOverrides={setMwOverrides} entryFees={entryFees} setEntryFees={setEntryFees} seasonLabel={seasonLabel} setSeasonLabel={setSeasonLabel} emails={emails} setEmails={setEmails} onForceRefresh={()=>{setRefreshStatus("loading");liveRefresh(fixtures, mwOverrides).then(({fixtures:nFx,updated,dateChanges,fixturesBuilt,newlyDiscoveredWeeks})=>{if(fixturesBuilt||updated>0||dateChanges>0)setFixtures(nFx);setRefreshStatus({updated,dateChanges});setTimeout(()=>setRefreshStatus(null),4000);const newWeeksMsg=newlyDiscoveredWeeks&&newlyDiscoveredWeeks.length?` — new: MW${newlyDiscoveredWeeks.join(", MW")} discovered!`:"";toast_(fixturesBuilt?`✅ Fixtures loaded from ESPN! ${Object.keys(nFx).length} match weeks`:`ESPN refresh: ${updated} results, ${dateChanges} date changes${newWeeksMsg}`);}).catch(e=>{setRefreshStatus(null);toast_("ESPN refresh failed: "+e.message,"error");});}}/>}
       </main>
     </div>
   );
@@ -5908,7 +5973,9 @@ function ReminderPanel({ew,deadlines,predictions,players,displayFixtures,fixture
   const dl=deadlines[ew];
   const dlStr=dl?new Date(dl).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"no deadline set";
 
-  const msgText=missing.length===0
+  const msgText = totalGames===0
+    ? `⏳ HPL Predictions MW${ew}: Fixtures aren't loaded yet — nothing to predict against right now. Check back shortly.`
+    : missing.length===0
     ? `✅ HPL Predictions MW${ew}: All players have submitted their predictions! Deadline: ${dlStr}`
     : `⚽ HPL Predictions MW${ew} reminder!
 
@@ -5941,7 +6008,14 @@ Don't forget to submit your predictions! 🎯`;
 
       {/* Who's missing */}
       <div style={{marginTop:8,marginBottom:12}}>
-        {missing.length===0?(
+        {totalGames===0 ? (
+          // No fixtures loaded for this week yet — genuinely nothing to check, not the
+          // same thing as "everyone's predicted". Previously this showed a false "✅ All
+          // players have predicted" (since 0 games needed - 0 done = 0 remaining for
+          // everyone, trivially), even though nobody had actually predicted anything —
+          // there was simply nothing to predict against yet.
+          <div style={{color:"#F59E0B",fontSize:13,fontWeight:600}}>⏳ No fixtures loaded for MW{ew} yet — check back once they're available</div>
+        ) : missing.length===0?(
           <div style={{color:"#34D399",fontSize:13,fontWeight:600}}>✅ All players have predicted for MW{ew}</div>
         ):(
           <div>
