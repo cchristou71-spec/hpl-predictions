@@ -524,6 +524,66 @@ async function fetchWithTimeout(url, options={}, ms=8000) {
   return Promise.race([fetch(url, options), timeout]);
 }
 
+// Fetch ESPN's soccer scoreboard one date at a time. ESPN's public scoreboard
+// endpoint used to (at least appear to) accept a hyphenated date RANGE
+// (dates=20260901-20261001) but now rejects that format outright with a 400 —
+// confirmed directly: every range query failed, including ones covering dates we
+// already know have real fixtures, while querying a single date alone
+// (dates=20261010) succeeded immediately and returned real games. This was the
+// actual cause behind a whole round (the one straight after an international
+// break) never being discoverable by a normal refresh, no matter how many times it
+// was retried — not a data-availability gap, a request-format one.
+//
+// Batches requests (rather than one giant sequential loop) to keep this reasonably
+// fast without firing hundreds of simultaneous calls at ESPN at once.
+async function fetchEspnDatesIndividually(rangeStart, fetchEnd, fmt) {
+  const dates = [];
+  let d = new Date(rangeStart);
+  while (d <= fetchEnd) {
+    dates.push(fmt(d));
+    d.setDate(d.getDate() + 1);
+  }
+  const events = [];
+  const seen = new Set();
+  let successCount = 0, failCount = 0, totalRawEvents = 0;
+  const failedDates = [];
+  const BATCH_SIZE = 8;
+  for (let i = 0; i < dates.length; i += BATCH_SIZE) {
+    const batch = dates.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(batch.map(async (dateStr) => {
+      try {
+        const r = await fetchWithTimeout(
+          `https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=${dateStr}&limit=200`
+        );
+        if (r.ok) {
+          const d2 = await r.json();
+          return { dateStr, ok: true, rawCount: (d2.events||[]).length, events: d2.events||[] };
+        }
+        return { dateStr, ok: false, status: r.status };
+      } catch(e) {
+        return { dateStr, ok: false, error: e.message };
+      }
+    }));
+    results.forEach(res => {
+      if (res.ok) {
+        successCount++;
+        totalRawEvents += res.rawCount;
+        res.events.forEach(ev => { if (!seen.has(ev.id)) { seen.add(ev.id); events.push(ev); } });
+      } else {
+        failCount++;
+        failedDates.push(res.dateStr);
+      }
+    });
+  }
+  return {
+    events,
+    chunkDiagnostics: {
+      totalDatesQueried: dates.length, successCount, failCount, totalRawEvents,
+      failedDates: failedDates.slice(0, 10), // cap what's kept — just needs a sample if something's genuinely wrong
+    },
+  };
+}
+
 async function liveRefresh(fixtures, mwOverrides) {
   const ESPN_TEAM_MAP = {
     "Arsenal":"Arsenal","Arsenal FC":"Arsenal",
@@ -601,43 +661,7 @@ async function liveRefresh(fixtures, mwOverrides) {
       fetchEnd = new Date(now); fetchEnd.setDate(fetchEnd.getDate() + 60);
     }
 
-    const events = [];
-    const seen = new Set();
-    let chunkStart = new Date(rangeStart);
-    // Diagnostic trail of exactly what was queried and what came back — added after a
-    // report that ESPN had genuinely published a round (10 Oct) that our app's refresh
-    // wasn't picking up, to see directly (from a real browser, not a server-side test
-    // environment ESPN may treat differently) whether the query reaches the right
-    // dates at all, and what ESPN actually returns for it.
-    const chunkDiagnostics = [];
-
-    while (chunkStart < fetchEnd) {
-      const chunkEnd = new Date(chunkStart);
-      chunkEnd.setDate(chunkEnd.getDate() + 30);
-      if (chunkEnd > fetchEnd) chunkEnd.setTime(fetchEnd.getTime());
-
-      const rangeLabel = `${fmt(chunkStart)}-${fmt(chunkEnd)}`;
-      try {
-        const r = await fetchWithTimeout(
-          `https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=${rangeLabel}&limit=200`
-        );
-        if (r.ok) {
-          const d = await r.json();
-          const rawCount = (d.events || []).length;
-          chunkDiagnostics.push({ range: rangeLabel, ok: true, status: r.status, rawEventCount: rawCount });
-          (d.events || []).forEach(ev => {
-            if (!seen.has(ev.id)) { seen.add(ev.id); events.push(ev); }
-          });
-        } else {
-          chunkDiagnostics.push({ range: rangeLabel, ok: false, status: r.status });
-        }
-      } catch(e) {
-        console.log(`Chunk ${fmt(chunkStart)} failed:`, e.message);
-        chunkDiagnostics.push({ range: rangeLabel, ok: false, error: e.message });
-      }
-
-      chunkStart.setDate(chunkStart.getDate() + 30);
-    }
+    const { events, chunkDiagnostics } = await fetchEspnDatesIndividually(rangeStart, fetchEnd, fmt);
 
     console.log(`ESPN: fetched ${events.length} events (${fixturesAreEmptyCheck ? "full season" : "rolling window"})`);
     if (!events.length) return { fixtures, updated: 0, dateChanges: 0, chunkDiagnostics };
@@ -5474,24 +5498,35 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
             🔄 Refresh Now
           </button>
         </div>
-        {lastRefreshDiagnostics && lastRefreshDiagnostics.length>0 && (
+        {lastRefreshDiagnostics && (
           <div style={{...S.card,background:"#0F172A",border:"1px solid #334155",padding:"10px 14px"}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#94A3B8",marginBottom:6}}>🔍 Last refresh — what was actually asked for and returned</div>
+            <div style={{fontSize:12,fontWeight:700,color:"#94A3B8",marginBottom:6}}>🔍 Last refresh — what was actually queried</div>
             <div style={{fontSize:11,color:"#64748B",marginBottom:8}}>
-              Added after a report that a fixture round visible directly on ESPN wasn't showing up here — this
-              shows the exact date ranges queried and how many raw events ESPN sent back for each, so a gap
-              between "the data exists" and "our refresh found it" can be seen directly, from this device, rather
-              than guessed at.
+              ESPN's scoreboard only accepts one date per query, not a date range — this queries each day
+              individually within the refresh window and summarises the results here, so a gap between
+              "the fixtures exist on ESPN" and "our refresh found them" can be seen directly.
             </div>
-            {lastRefreshDiagnostics.map((c,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0",
-                borderBottom:i<lastRefreshDiagnostics.length-1?"1px solid #1E293B":"none"}}>
-                <span style={{color:"#CBD5E1",fontFamily:"monospace"}}>{c.range}</span>
-                <span style={{color:c.ok?(c.rawEventCount>0?"#34D399":"#F59E0B"):"#F87171"}}>
-                  {c.ok ? `${c.rawEventCount} event${c.rawEventCount===1?"":"s"} returned` : `failed (${c.status||c.error||"unknown"})`}
-                </span>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"4px 0"}}>
+              <span style={{color:"#CBD5E1"}}>Dates queried</span>
+              <span style={{color:"#94A3B8"}}>{lastRefreshDiagnostics.totalDatesQueried}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"4px 0"}}>
+              <span style={{color:"#CBD5E1"}}>Succeeded</span>
+              <span style={{color:"#34D399"}}>{lastRefreshDiagnostics.successCount}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"4px 0"}}>
+              <span style={{color:"#CBD5E1"}}>Failed</span>
+              <span style={{color:lastRefreshDiagnostics.failCount>0?"#F87171":"#34D399"}}>{lastRefreshDiagnostics.failCount}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"4px 0"}}>
+              <span style={{color:"#CBD5E1"}}>Raw fixtures found</span>
+              <span style={{color:"#94A3B8"}}>{lastRefreshDiagnostics.totalRawEvents}</span>
+            </div>
+            {lastRefreshDiagnostics.failedDates && lastRefreshDiagnostics.failedDates.length>0 && (
+              <div style={{fontSize:11,color:"#F87171",marginTop:6}}>
+                Failed dates (sample): {lastRefreshDiagnostics.failedDates.join(", ")}
               </div>
-            ))}
+            )}
           </div>
         )}
         <div style={S.card}>
