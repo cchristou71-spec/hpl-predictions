@@ -5745,6 +5745,7 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
         </div>
         <ReminderPanel ew={ew} deadlines={deadlines} predictions={predictions} players={players} displayFixtures={displayFixtures} fixtures={fixtures}/>
         <RevealEmailPanel ew={ew} reveals={reveals} emails={emails} toast_={toast_}/>
+        <WeeklySummaryPanel toast_={toast_}/>
         <div style={S.card}>
           <span style={S.ct}>MW{ew} — Fixtures & Results</span>
           {fxs.map(fx=>(
@@ -6232,6 +6233,59 @@ function SeasonAutoSubmitPanel({toast_}){
         style={{padding:"8px 14px",background:"#A78BFA22",border:"1px solid #A78BFA",borderRadius:8,color:"#A78BFA",fontSize:13,fontWeight:700,cursor:running?"default":"pointer",opacity:running?0.6:1}}>
         {running?"Checking…":"🤖 Run auto-submit check now"}
       </button>
+    </div>
+  );
+}
+
+// Sends the "how the week went" wrap-up email for a specific match week — normally
+// fully automatic (hourly check, fires the moment a revealed week's last result
+// comes in), this lets admin trigger or re-send one on demand, e.g. to check the
+// content looks right, or to catch a week the automatic check somehow missed.
+function WeeklySummaryPanel({toast_}){
+  const[running,setRunning]=useState(false);
+  const[mwInput,setMwInput]=useState("");
+
+  const runNow=async()=>{
+    const mw=parseInt(mwInput,10);
+    if(!mw||mw<1||mw>38){ toast_("Enter a valid match week number first","error"); return; }
+    setRunning(true);
+    try{
+      const res=await fetch(`${SUPA_URL}/functions/v1/weekly-summary?manual_mw=${mw}`,{
+        method:"POST",
+        headers:{"apikey":SUPA_KEY,"Authorization":`Bearer ${SUPA_KEY}`,"Content-Type":"application/json"}
+      });
+      const data=await res.json().catch(()=>null);
+      if(!res.ok||!data?.ok){
+        toast_("Weekly summary failed: "+(data?.error||res.status),"error");
+      } else if((data.sent||[]).length>0){
+        toast_(`✅ MW${mw} wrap-up sent to all players`,"ok");
+      } else {
+        toast_(data.reason||`MW${mw} isn't ready yet — needs to be revealed with every fixture finished`,"error");
+      }
+    }catch(e){
+      toast_("Weekly summary failed: "+e.message,"error");
+    }
+    setRunning(false);
+  };
+
+  return(
+    <div style={{...S.card,border:"1px solid #34D39944",marginBottom:10}}>
+      <span style={S.ct}>📊 Weekly wrap-up email</span>
+      <div style={{fontSize:12,color:"#64748B",marginTop:8,marginBottom:12,lineHeight:1.6}}>
+        Once a match week is revealed and every one of its games has a final result, an automatic email goes
+        out to everyone with that week's top performer(s), any exact-score calls, joker outcomes, and the
+        updated overall standings. Runs hourly on its own, once per week ever. This lets you trigger or
+        re-send one manually for a specific week — e.g. to preview it, or if a week's automatic email needs
+        redoing.
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <input type="number" placeholder="MW number" value={mwInput} onChange={e=>setMwInput(e.target.value)}
+          style={{...S.inp,flex:1,marginBottom:0}}/>
+        <button onClick={runNow} disabled={running}
+          style={{padding:"8px 14px",background:"#34D39922",border:"1px solid #34D399",borderRadius:8,color:"#34D399",fontSize:13,fontWeight:700,cursor:running?"default":"pointer",opacity:running?0.6:1,whiteSpace:"nowrap"}}>
+          {running?"Sending…":"📊 Send now"}
+        </button>
+      </div>
     </div>
   );
 }
