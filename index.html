@@ -7466,6 +7466,19 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
       {seasonActual && (
         <div style={{...S.card,marginBottom:16}}>
           <div style={{...S.ct,marginBottom:10}}>All Predictions vs Actual</div>
+          {/* Reveal status banner — kept OUTSIDE the scrolling flex row so it can't stretch a column between the actual table and the players */}
+          {!leagueRevealed && (
+            <div style={{background:"#78350F22",border:"1px solid #78350F",
+              borderRadius:8,padding:"8px 12px",margin:"0 0 10px",fontSize:12,color:"#F59E0B"}}>
+              🔒 Other players' predictions hidden until admin reveals the league table
+            </div>
+          )}
+          {leagueRevealed && (
+            <div style={{background:"#064E3B22",border:"1px solid #34D399",
+              borderRadius:8,padding:"8px 12px",margin:"0 0 10px",fontSize:12,color:"#34D399"}}>
+              ✅ League table predictions revealed — all players' predictions visible, locked for the season
+            </div>
+          )}
           {/* ROW_H=36 consistent across all columns so positions align */}
           <div style={{overflowX:"auto",paddingBottom:8}}>
           <div style={{display:"flex",gap:4,minWidth:"max-content"}}>
@@ -7527,19 +7540,6 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
             {/* Divider */}
             <div style={{width:2,background:"#334155",borderRadius:2,flexShrink:0,margin:"22px 2px 0"}}/>
 
-            {/* Banner: show reveal status */}
-            {!leagueRevealed && (
-              <div style={{width:"100%",background:"#78350F22",border:"1px solid #78350F",
-                borderRadius:8,padding:"8px 12px",margin:"8px 0",fontSize:12,color:"#F59E0B"}}>
-                🔒 Other players' predictions hidden until admin reveals the league table
-              </div>
-            )}
-            {leagueRevealed && (
-              <div style={{width:"100%",background:"#064E3B22",border:"1px solid #34D399",
-                borderRadius:8,padding:"8px 12px",margin:"8px 0",fontSize:12,color:"#34D399"}}>
-                ✅ League table predictions revealed — all predictions visible and locked
-              </div>
-            )}
             {/* Each player: prediction column + pts column */}
             {/* Only show own prediction until league is revealed; after reveal show all */}
             {players.filter(p=>seasonPreds?.[p] && (leagueRevealed || p===me)).map(p => {
