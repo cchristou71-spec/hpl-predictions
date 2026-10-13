@@ -1259,6 +1259,20 @@ const buildFixtures = () => {
   return out;
 };
 
+// Fixture ordering used everywhere fixtures are listed (Predict, Results, admin):
+// kick-off date, then kick-off time, then home team A-Z. Uses the CURRENT (possibly
+// rescheduled) date/time, so ordering always follows any date change. TBC fixtures
+// (no date yet) and fixtures with no time sort last within their group.
+function cmpFixtures(a, b) {
+  const dKey = fx => fx.currentDate === "" ? "9999-12-31" : (fx.currentDate || fx.date || "9999-12-31");
+  const tKey = fx => fx.currentTime || fx.time || "99:99";
+  const da = dKey(a), db = dKey(b);
+  if (da !== db) return da < db ? -1 : 1;
+  const ta = tKey(a), tb = tKey(b);
+  if (ta !== tb) return ta < tb ? -1 : 1;
+  return (a.home || "").localeCompare(b.home || "");
+}
+
 // Given all fixtures, build a map of {mw: {start, end}} date ranges
 // Then given a new date, find which MW it belongs to
 function getMWDateRanges(fixturesByMW) {
@@ -1417,8 +1431,8 @@ function App(){
       });
     });
 
-    // Sort each MW A-Z by home team
-    Object.values(out).forEach(list=>list.sort((a,b)=>a.home.localeCompare(b.home)));
+    // Sort each MW by date, time, then home team A-Z (recomputed whenever fixture dates change)
+    Object.values(out).forEach(list=>list.sort(cmpFixtures));
     
     return out;
   }, [fixtures, mwOverrides]);
@@ -2476,7 +2490,7 @@ function App(){
 }
 
 function Predict({fixtures,displayFixtures,predictions,reveals,publicReveals,deadlines,fixtureDeadlines,players,jokers,isPast,jokersUsed,hasJoker,canJoker,me,setMe,pins,setPins,pinScreen,setPinScreen,saveAll,mw,setMw,draft,setDraft,submit,setPredictions,setAdmin,isOnline,admin,setTab,predSavedAt,toast_,saveLocalBackup,confirmLocalBackups,setPendingBackups,getPendingBackups}){
-  const currentList=(displayFixtures||fixtures)[mw]||[];
+  const currentList=[...((displayFixtures||fixtures)[mw]||[])].sort(cmpFixtures);
   // Fixtures originally scheduled for this week but since moved elsewhere — shown here
   // too (read-only, pointing at their new week) so admins/players checking this week
   // aren't confused by a fixture silently vanishing from where they expect it.
@@ -3499,7 +3513,7 @@ function HistoricResults({fixtures,displayFixtures,predictions,reveals,publicRev
           cumTotals[w] = {...running};
         });
         return allMWs.map(w=>{
-        const fxs=(df[w]||[]).sort((a,b)=>new Date(a.currentDate||a.date)-new Date(b.currentDate||b.date));
+        const fxs=(df[w]||[]).sort(cmpFixtures);
         const fxsWithResult=fxs.filter(fx=>fx.result);
         const revealed=isRevealed(w);
         // "Future" now only means genuinely not-yet-revealed with nothing to show
@@ -3703,7 +3717,7 @@ function RecentResults({fixtures,displayFixtures}){
   const mwsWithResults=Object.keys(df)
     .map(w=>parseInt(w))
     .filter(w=>{
-      const fxs=df[w]||[];
+      const fxs=[...(df[w]||[])].sort(cmpFixtures);
       return fxs.some(fx=>fx.result);
     })
     .sort((a,b)=>b-a)
@@ -3727,7 +3741,7 @@ function RecentResults({fixtures,displayFixtures}){
     <div style={{padding:"12px 16px 80px"}}>
       <div style={{fontSize:13,color:"#64748B",marginBottom:12}}>Last {mwsWithResults.length} weeks with results</div>
       {mwsWithResults.map(w=>{
-        const fxs=(df[w]||[]).filter(fx=>fx.result).sort((a,b)=>new Date(a.currentDate||a.date)-new Date(b.currentDate||b.date));
+        const fxs=(df[w]||[]).filter(fx=>fx.result).sort(cmpFixtures);
         return(
           <div key={w} style={{marginBottom:20}}>
             <div style={{fontSize:12,fontWeight:800,color:"#A78BFA",textTransform:"uppercase",
@@ -3798,11 +3812,8 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
     return ai-bi;
   });
   // Sort fixtures by date then home team
-  const sortFxs = (fxs) => [...fxs].sort((a,b)=>{
-    const da=new Date(a.currentDate||a.date), db=new Date(b.currentDate||b.date);
-    if(da-db!==0)return da-db;
-    return (a.home||'').localeCompare(b.home||'');
-  });
+  // Sort fixtures by date, time, then home team (same rule as the Predict tab)
+  const sortFxs = (fxs) => [...fxs].sort(cmpFixtures);
   // homeQ/awayQ/searchMode all lifted to App level — persist across tab switches
 
   // Flatten ALL fixtures for search - all 38 MWs including future ones
@@ -3834,7 +3845,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
       const hMatch=!hq||fx.home.toLowerCase().includes(hq);
       const aMatch=!aq||fx.away.toLowerCase().includes(aq);
       return hMatch&&aMatch;
-    }).sort((a,b)=>a.displayMW-b.displayMW);
+    }).sort((a,b)=>(a.displayMW-b.displayMW)||cmpFixtures(a,b));
   },[allFx,homeQ,awayQ]);
 
   // The week to review by default — stays on a week through its whole "live" spell
@@ -3868,7 +3879,7 @@ function Results({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
   },[reviewMW]);
 
   const printMW = (w) => {
-    const fxList = (displayFixtures||fixtures)[w] || [];
+    const fxList = [...((displayFixtures||fixtures)[w] || [])].sort(cmpFixtures);
     const revealed = reveals[w];
     const doc = window.open('','_blank','width=1200,height=800');
 
@@ -4862,7 +4873,7 @@ function HPLPredictionsEditor({fixtures, displayFixtures, predictions, setPredic
 
   const [selectedMW, setSelectedMW] = React.useState(null);
   const mw = selectedMW !== null ? selectedMW : activeMW;
-  const fxs = (df[mw]||[]).sort((a,b)=>new Date(a.currentDate||a.date)-new Date(b.currentDate||b.date));
+  const fxs = (df[mw]||[]).sort(cmpFixtures);
   const [editCells, setEditCells] = React.useState({});
   const [saving, setSaving] = React.useState(false);
 
@@ -5284,7 +5295,7 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
 
   const safeMWOverrides = mwOverrides || {};
   const safeEntryFees = entryFees || {};
-  const fxs=(displayFixtures||fixtures)[ew]||[];
+  const fxs=[...((displayFixtures||fixtures)[ew]||[])].sort(cmpFixtures);
   const upRes=(id,side,v)=>{
     setFixtures(f=>{
       const nf={...f};
