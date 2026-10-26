@@ -4645,7 +4645,7 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
               {openPts.has(r.p)&&(
                 <div style={{background:"#0F172A",border:"1px solid #334155",borderRadius:8,padding:"8px 10px",marginBottom:8}}>
                   {r.allWeeks.length===0&&<div style={{fontSize:13,color:"#64748B"}}>No completed games yet.</div>}
-                  {r.allWeeks.map((wk,wi)=>(
+                  {[...r.allWeeks].reverse().map((wk,wi)=>(
                     <div key={wk.w} style={{marginTop:wi?10:0}}>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:"#A78BFA",
                         borderBottom:"1px solid #334155",paddingBottom:3,marginBottom:4}}>
