@@ -4562,9 +4562,22 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
       });
       if(wHadPred) weekTotals.push({w,pts:wPts});
     });
+    const allWeeks=revs.map(w=>{
+      const games=[];let wt=0;
+      ((displayFixtures||fixtures)[w]||[]).forEach(fx=>{
+        if(!fx.result||fx.result.homeGoals===null||fx.result.homeGoals===undefined)return;
+        const pred=predictions[p]?.[fx.id];
+        const base=pred?calcPts(pred,fx.result):null;
+        const jk=!!(pred&&pred.joker);
+        const fp=base===null?null:base*(jk?2:1);
+        if(fp!==null) wt+=fp;
+        games.push({home:fx.home,away:fx.away,pred,result:fx.result,base,jk,fp});
+      });
+      return {w,games,wt};
+    }).filter(x=>x.games.length);
     const best = weekTotals.length ? weekTotals.reduce((a,b)=>b.pts>a.pts?b:a) : null;
     const worst = weekTotals.length ? weekTotals.reduce((a,b)=>b.pts<a.pts?b:a) : null;
-    return{p,tot,exact,correct,played,jk1Used,jk2Used,jkBonusTotal,jokerGames,
+    return{p,tot,exact,correct,played,jk1Used,jk2Used,jkBonusTotal,jokerGames,allWeeks,
       best,worst,jokerPlays,jokerHits,
       jokerPct: jokerPlays?Math.round(jokerHits/jokerPlays*100):null,
       exactPct: played?Math.round(exact/played*100):0,
@@ -4573,6 +4586,8 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
 
   const[expandedPlayers,setExpandedPlayers]=React.useState(()=>new Set());
   const[openJoker,setOpenJoker]=React.useState(null); // "Player|half"
+  const[openPts,setOpenPts]=React.useState(()=>new Set()); // players with full points breakdown open
+  const togglePts=(p)=>setOpenPts(prev=>{const n=new Set(prev);if(n.has(p))n.delete(p);else n.add(p);return n;});
   const togglePlayer=(p)=>{
     setExpandedPlayers(prev=>{
       const next=new Set(prev);
@@ -4622,6 +4637,37 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
               <div style={{fontSize:13,color:"#64748B",marginBottom:8}}>
                 🎯{r.exact} exact ({r.exactPct}%) · ✓{r.correct} correct · {r.played} preds
               </div>
+              <div onClick={()=>togglePts(r.p)}
+                style={{background:"#4C1D9544",border:"1px solid #7C3AED88",borderRadius:8,padding:"8px 12px",marginBottom:8,
+                display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",fontSize:14,fontWeight:700,color:"#C4B5FD"}}>
+                <span>📋 Points breakdown</span><span>{openPts.has(r.p)?"▲":"▼"}</span>
+              </div>
+              {openPts.has(r.p)&&(
+                <div style={{background:"#0F172A",border:"1px solid #334155",borderRadius:8,padding:"8px 10px",marginBottom:8}}>
+                  {r.allWeeks.length===0&&<div style={{fontSize:13,color:"#64748B"}}>No completed games yet.</div>}
+                  {r.allWeeks.map((wk,wi)=>(
+                    <div key={wk.w} style={{marginTop:wi?10:0}}>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:"#A78BFA",
+                        borderBottom:"1px solid #334155",paddingBottom:3,marginBottom:4}}>
+                        <span>MW{wk.w}</span><span>{wk.wt} pts</span>
+                      </div>
+                      {wk.games.map((g,i)=>(
+                        <div key={i} style={{padding:"4px 0"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:13,color:"#E2E8F0"}}>
+                            <span>{g.home} v {g.away}{g.jk&&<span style={{color:"#F59E0B"}}> 🃏</span>}</span>
+                            <span style={{fontWeight:800,whiteSpace:"nowrap",color:g.fp===null?"#475569":g.fp>=6?"#34D399":g.fp>0?"#60A5FA":"#EF4444"}}>
+                              {g.fp===null?"–":g.fp+" pts"}
+                            </span>
+                          </div>
+                          <div style={{fontSize:12,color:"#94A3B8"}}>
+                            {g.pred?`Predicted ${g.pred.homeGoals}–${g.pred.awayGoals}`:"No prediction"} · Result {g.result.homeGoals}–{g.result.awayGoals}{g.jk&&g.base!==null?` · ${g.base} ×2`:""}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
                 <div style={{background:"#065F4622",border:"1px solid #34D39944",borderRadius:8,padding:"8px 10px"}}>
                   <div style={{fontSize:10,color:"#64748B",marginBottom:2}}>BEST WEEK</div>
