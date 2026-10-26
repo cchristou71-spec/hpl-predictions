@@ -1381,6 +1381,27 @@ function calcPts(pred,result){
 }
 const half=(mw)=>mw<=19?1:2;
 
+// Sanity-check warnings for a prediction (nudge only — never blocks a pick).
+// Keep these rules identical to the deadline-confirmation Edge Function.
+//  - Extreme score: win margin >=4, or >=7 total goals, or >=5 goals by one team
+//  - Upset: predicted winner sits 10+ places below the loser in the league table
+const ordN=(n)=>{const v=n%100;return n+(v>=11&&v<=13?"th":({1:"st",2:"nd",3:"rd"})[n%10]||"th");};
+function pickWarnings(home,away,hg,ag,table){
+  const h=parseInt(hg),a=parseInt(ag),out=[];
+  if(isNaN(h)||isNaN(a)) return out;
+  if(Math.abs(h-a)>=4||h+a>=7||h>=5||a>=5)
+    out.push(`Unusual score (${h}–${a}) — double-check?`);
+  if(Array.isArray(table)&&table.length>=10&&h!==a){
+    const ph=table.indexOf(home),pa=table.indexOf(away);
+    if(ph>=0&&pa>=0){
+      const winnerPos=h>a?ph:pa, loserPos=h>a?pa:ph;
+      if(winnerPos-loserPos>=10)
+        out.push(`Upset pick — ${h>a?home:away} (${ordN(winnerPos+1)}) to beat ${h>a?away:home} (${ordN(loserPos+1)}). Double-check?`);
+    }
+  }
+  return out;
+}
+
 function App(){
   const[tab,setTab]=useState("league");
   const[demoMode,setDemoMode]=useState(false);
@@ -2473,7 +2494,7 @@ function App(){
         </div>
       )}
       <main style={S.main}>
-        {tab==="predict"&&<Predict {...props} predSavedAt={predSavedAt} me={me} setMe={setMe} pins={pins} setPins={setPins} pinScreen={pinScreen} setPinScreen={setPinScreen} saveAll={saveAll} mw={mw} setMw={setMw} draft={draft} setDraft={setDraft} submit={submit} search={search} setSearch={setSearch} setPredictions={setPredictions} setAdmin={setAdmin} isOnline={isOnline} admin={admin} setTab={setTab} toast_={toast_} saveLocalBackup={saveLocalBackup} confirmLocalBackups={confirmLocalBackups} setPendingBackups={setPendingBackups} getPendingBackups={getPendingBackups}/>}
+        {tab==="predict"&&<Predict {...props} seasonActual={seasonActual} predSavedAt={predSavedAt} me={me} setMe={setMe} pins={pins} setPins={setPins} pinScreen={pinScreen} setPinScreen={setPinScreen} saveAll={saveAll} mw={mw} setMw={setMw} draft={draft} setDraft={setDraft} submit={submit} search={search} setSearch={setSearch} setPredictions={setPredictions} setAdmin={setAdmin} isOnline={isOnline} admin={admin} setTab={setTab} toast_={toast_} saveLocalBackup={saveLocalBackup} confirmLocalBackups={confirmLocalBackups} setPendingBackups={setPendingBackups} getPendingBackups={getPendingBackups}/>}
         {tab==="historicresults"&&<HistoricResults fixtures={effectiveFixtures} displayFixtures={effectiveFixtures} predictions={effectivePredictions} reveals={effectiveReveals} publicReveals={effectivePublicReveals} deadlines={deadlines} players={effectivePlayers} jokers={effectiveJokers} admin={admin} me={me} demoMode={demoMode} setDemoMode={setDemoMode}/>}
         {tab==="preds"&&<Results {...props} me={me} admin={admin} expMW={expMW} setExpMW={setExpMW} search={search} setSearch={setSearch} searchMode={searchMode} setSearchMode={setSearchMode} homeQ={homeQ} setHomeQ={setHomeQ} awayQ={awayQ} setAwayQ={setAwayQ}/>}
         {tab==="season"&&<SeasonTab
@@ -2489,7 +2510,7 @@ function App(){
   );
 }
 
-function Predict({fixtures,displayFixtures,predictions,reveals,publicReveals,deadlines,fixtureDeadlines,players,jokers,isPast,jokersUsed,hasJoker,canJoker,me,setMe,pins,setPins,pinScreen,setPinScreen,saveAll,mw,setMw,draft,setDraft,submit,setPredictions,setAdmin,isOnline,admin,setTab,predSavedAt,toast_,saveLocalBackup,confirmLocalBackups,setPendingBackups,getPendingBackups}){
+function Predict({seasonActual,fixtures,displayFixtures,predictions,reveals,publicReveals,deadlines,fixtureDeadlines,players,jokers,isPast,jokersUsed,hasJoker,canJoker,me,setMe,pins,setPins,pinScreen,setPinScreen,saveAll,mw,setMw,draft,setDraft,submit,setPredictions,setAdmin,isOnline,admin,setTab,predSavedAt,toast_,saveLocalBackup,confirmLocalBackups,setPendingBackups,getPendingBackups}){
   const currentList=[...((displayFixtures||fixtures)[mw]||[])].sort(cmpFixtures);
   // Fixtures originally scheduled for this week but since moved elsewhere — shown here
   // too (read-only, pointing at their new week) so admins/players checking this week
@@ -3278,6 +3299,9 @@ function Predict({fixtures,displayFixtures,predictions,reveals,publicReveals,dea
                 <span style={{fontSize:13,fontWeight:700,color:"#E2E8F0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sn(fx.away)}</span>
               </div>
             </div>
+            {!off&&!fx.result&&pickWarnings(fx.home,fx.away,pred.homeGoals,pred.awayGoals,seasonActual).map((w,wi)=>(
+              <div key={wi} style={{marginTop:6,fontSize:12,color:"#FBBF24",background:"#F59E0B15",border:"1px solid #F59E0B44",borderRadius:6,padding:"4px 8px",textAlign:"center"}}>⚠️ {w}</div>
+            ))}
             {fx.result&&canSeeRevealed&&(
               <div style={{textAlign:"center",marginTop:8,fontSize:14,color:"#94A3B8"}}>
                 Result: <b style={{color:"#34D399"}}>{fx.result.homeGoals}–{fx.result.awayGoals}</b>
