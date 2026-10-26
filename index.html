@@ -4536,6 +4536,7 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
     // Joker tracking per half-season
     let jk1Used=0,jk2Used=0,jkBonusTotal=0;
     let jokerPlays=0,jokerHits=0; // hit = joker scored at least the 1pt correct-result
+    const jokerGames=[]; // revealed + completed joker games only
     const weekTotals=[]; // { w, pts } — for best/worst week
     // Count ALL jokers played (including locked MWs with no result yet)
     Object.entries(predictions[p]||{}).forEach(([fxId,pred])=>{
@@ -4556,13 +4557,14 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
         const fp=basePts*(jk?2:1);
         tot+=fp; wPts+=fp;
         if(basePts===3)exact++;if(basePts>=1)correct++;
-        if(jk){ jkBonusTotal+=fp-basePts; jokerPlays++; if(basePts>=1) jokerHits++; }
+        if(jk){ jkBonusTotal+=fp-basePts; jokerPlays++; if(basePts>=1) jokerHits++;
+          jokerGames.push({w,half:half(parseInt(String(fx.id).split('-')[0])),home:fx.home,away:fx.away,pred,result:fx.result,base:basePts,fp}); }
       });
       if(wHadPred) weekTotals.push({w,pts:wPts});
     });
     const best = weekTotals.length ? weekTotals.reduce((a,b)=>b.pts>a.pts?b:a) : null;
     const worst = weekTotals.length ? weekTotals.reduce((a,b)=>b.pts<a.pts?b:a) : null;
-    return{p,tot,exact,correct,played,jk1Used,jk2Used,jkBonusTotal,
+    return{p,tot,exact,correct,played,jk1Used,jk2Used,jkBonusTotal,jokerGames,
       best,worst,jokerPlays,jokerHits,
       jokerPct: jokerPlays?Math.round(jokerHits/jokerPlays*100):null,
       exactPct: played?Math.round(exact/played*100):0,
@@ -4570,6 +4572,7 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
   }).sort((a,b)=>b.tot-a.tot);
 
   const[expandedPlayers,setExpandedPlayers]=React.useState(()=>new Set());
+  const[openJoker,setOpenJoker]=React.useState(null); // "Player|half"
   const togglePlayer=(p)=>{
     setExpandedPlayers(prev=>{
       const next=new Set(prev);
@@ -4583,6 +4586,9 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
       <div style={S.card}>
         <div style={S.ct}>🏆 Season Standings</div>
         <div style={{color:"#64748B",fontSize:12,marginTop:2}}>{revs.length}/38 match weeks revealed</div>
+      </div>
+      <div style={{background:"#F59E0B11",border:"1px solid #F59E0B44",borderRadius:10,padding:"10px 14px",marginBottom:10,fontSize:13,color:"#FBBF24",lineHeight:1.5}}>
+        🃏 <b>Jokers:</b> 5 per half-season, 1 per match week. Play your Half 1 jokers by <b>MW19</b> and your Half 2 jokers by <b>MW38</b> (final game of the season).
       </div>
       {rows.map((r,i)=>{
         const prevRank=prevRankMap[r.p];
@@ -4631,14 +4637,15 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
                 </div>
               </div>
               <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                <div style={{background:"#F59E0B11",border:"1px solid #F59E0B33",borderRadius:6,
-                  padding:"4px 10px",fontSize:13,color:"#F59E0B"}}>
-                  🃏 H1: {r.jk1Used}/5
-                </div>
-                <div style={{background:"#F59E0B11",border:"1px solid #F59E0B33",borderRadius:6,
-                  padding:"4px 10px",fontSize:13,color:"#F59E0B"}}>
-                  🃏 H2: {r.jk2Used}/5
-                </div>
+                {[1,2].map(h=>{
+                  const key=r.p+"|"+h, open=openJoker===key;
+                  return(
+                  <div key={h} onClick={()=>setOpenJoker(open?null:key)}
+                    style={{background:open?"#F59E0B33":"#F59E0B11",border:"1px solid "+(open?"#F59E0B":"#F59E0B33"),borderRadius:6,
+                    padding:"4px 10px",fontSize:13,color:"#F59E0B",cursor:"pointer"}}>
+                    🃏 H{h}: {h===1?r.jk1Used:r.jk2Used}/5 {open?"▲":"▼"}
+                  </div>);
+                })}
                 <div style={{background:r.jkBonusTotal>0?"#065F4622":"#1E293B",
                   border:`1px solid ${r.jkBonusTotal>0?"#34D39944":"#334155"}`,borderRadius:6,
                   padding:"4px 10px",fontSize:13,
@@ -4646,6 +4653,32 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
                   +{r.jkBonusTotal} bonus pts from jokers
                 </div>
               </div>
+              {[1,2].map(h=>{
+                if(openJoker!==r.p+"|"+h) return null;
+                const games=r.jokerGames.filter(g=>g.half===h).sort((a,b)=>a.w-b.w);
+                const used=h===1?r.jk1Used:r.jk2Used;
+                const pending=used-games.length;
+                return(
+                  <div key={h} style={{marginTop:8,background:"#0F172A",border:"1px solid #334155",borderRadius:8,padding:"8px 10px"}}>
+                    <div style={{fontSize:11,color:"#64748B",fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:0.8}}>
+                      🃏 {r.p} · Half {h} jokers
+                    </div>
+                    {games.length===0&&<div style={{fontSize:13,color:"#64748B"}}>No completed joker games yet.</div>}
+                    {games.map((g,i)=>(
+                      <div key={i} style={{padding:"6px 0",borderTop:i?"1px solid #1E293B":"none"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:13,color:"#E2E8F0"}}>
+                          <span><b style={{color:"#A78BFA"}}>MW{g.w}</b> · {g.home} v {g.away}</span>
+                          <span style={{fontWeight:800,color:g.fp>=6?"#34D399":g.fp>0?"#60A5FA":"#EF4444",whiteSpace:"nowrap"}}>{g.fp} pts</span>
+                        </div>
+                        <div style={{fontSize:12,color:"#94A3B8",marginTop:2}}>
+                          Predicted {g.pred.homeGoals}–{g.pred.awayGoals} · Result {g.result.homeGoals}–{g.result.awayGoals} · {g.base} ×2
+                        </div>
+                      </div>
+                    ))}
+                    {pending>0&&<div style={{fontSize:12,color:"#64748B",marginTop:6}}>+{pending} joker{pending>1?"s":""} in progress (shown once revealed)</div>}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
