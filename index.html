@@ -4792,7 +4792,7 @@ function League({fixtures,displayFixtures,predictions,reveals,publicReveals,play
           {isExpanded && (
             <div style={{paddingLeft:48,paddingTop:2}} onClick={e=>e.stopPropagation()}>
               <div style={{fontSize:13,color:"#64748B",marginBottom:8}}>
-                🎯{r.exact} exact ({r.exactPct}%) · ✓{r.correct} correct · {r.played} preds
+                🎯{r.exact} exact ({r.exactPct}%) · ✓{r.correct-r.exact} correct · {r.played} preds
               </div>
               <div onClick={()=>togglePts(r.p)}
                 style={{background:"#4C1D9544",border:"1px solid #7C3AED88",borderRadius:8,padding:"8px 12px",marginBottom:8,
