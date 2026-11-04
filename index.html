@@ -240,6 +240,7 @@ async function logRevealAction(week, action, source, who, path) {
 // old and new value, when, and from which device. Quick successive edits to the same
 // week from the same device (e.g. typing into the date box) are merged into one line.
 let _dlReopenTimer=null; // debounce for the reopen-on-extension check in Admin
+let _dlMigrationRan=false; // one-time deadline-rule migration: once per page load at most
 async function logDeadlineChange(week, from, to, source, who) {
   try {
     if ((from||"") === (to||"")) return;
@@ -359,10 +360,35 @@ function fmtUKFull(d,withTz=true){
   return d.toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Europe/London"})+(withTz?" "+ukTzName(d):"");
 }
 function ukAddDays(ymd,n){ const d=new Date(ymd+"T12:00:00Z"); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
-// Suggested deadline: the Wednesday 20:00 before a week's earliest fixture (UK time).
+// ── PREDICTION DEADLINE RULE ─────────────────────────────────────────────────
+// A match week's deadline is the Wednesday 21:00 (UK time) before its first game —
+// OR, if a game kicks off before then (e.g. a Wednesday-night fixture), 1 hour before
+// that first kick-off, so a week can never stay open once a game has started.
+const DEADLINE_WED_TIME="21:00";
+const DEADLINE_LEAD_MINS=60;
+const DEADLINE_LEAD_TEXT=DEADLINE_LEAD_MINS%60===0?(DEADLINE_LEAD_MINS/60)+"h":DEADLINE_LEAD_MINS+" min";
+const DEADLINE_RULE_TEXT=`Wed ${DEADLINE_WED_TIME}, or ${DEADLINE_LEAD_TEXT} before the first kick-off if a game starts earlier`;
+// Works out the deadline for one week's fixtures. Returns null if no fixture has a date.
+// { deadline: "YYYY-MM-DDTHH:MM" (UK wall-clock), capped: true if the kick-off rule applied,
+//   cap: Date of (first kick-off - lead), firstKickoff: Date }
+function ukWeekDeadlineInfo(fxList){
+  const kos=(fxList||[])
+    .filter(fx=>fx && fx.currentDate!=="" && (fx.currentDate||fx.date)) // skip TBC (postponed, no new date)
+    .map(fx=>ukWallToDate(`${fx.currentDate||fx.date}T${fx.currentTime||fx.time||"00:00"}`))
+    .filter(d=>!isNaN(d));
+  if(!kos.length) return null;
+  const firstKickoff=new Date(Math.min(...kos.map(d=>d.getTime())));
+  const koDay=dateToUKWall(firstKickoff).slice(0,10);
+  const dow=new Date(koDay+"T12:00:00Z").getUTCDay(), back=dow>=3?dow-3:dow+4;
+  const wed=ukAddDays(koDay,-back)+"T"+DEADLINE_WED_TIME;
+  const cap=new Date(firstKickoff.getTime()-DEADLINE_LEAD_MINS*60000);
+  const capped=ukWallToDate(wed)>cap;
+  return {deadline:capped?dateToUKWall(cap):wed, capped, cap, firstKickoff};
+}
+// (Older helper, kept for compatibility — uses the date only, not kick-off times.)
 function ukSuggestWedDeadline(earliest){
   const dow=earliest.getUTCDay(), back=dow>=3?dow-3:dow+4;
-  return ukAddDays(earliest.toISOString().slice(0,10),-back)+"T20:00";
+  return ukAddDays(earliest.toISOString().slice(0,10),-back)+"T"+DEADLINE_WED_TIME;
 }
 
 function computeCurrentMW(deadlines, fixturesObj) {
@@ -854,29 +880,19 @@ async function liveRefresh(fixtures, mwOverrides) {
           date: evDate, time: evTime, currentDate: evDate, currentTime: evTime, result: e.result });
       });
 
-      // Auto-set deadlines: Wednesday 20:00 (8pm) before the first game of each MW.
-      // Rule: find the Wednesday of the same week as the first game (week = Mon-Sun).
-      // If the first game falls Mon or Tue (before Wednesday), use the previous Wednesday.
-      // This matches the pub night rule — deadline is always Wed 8pm before that week's games.
+      // Auto-set deadlines (UK time): Wednesday 21:00 before the first game of each MW,
+      // or 1 hour before the first kick-off if a game starts earlier than that (e.g. a
+      // Wednesday-night fixture). See ukWeekDeadlineInfo().
       const autoDeadlines = {};
       const mwNums = Object.keys(built).map(Number).sort((a,b)=>a-b);
       const usedDeadlines = new Set();
       mwNums.forEach(mwNum => {
-        const fxs = built[mwNum];
-        const firstDate = fxs.reduce((min, fx) => fx.date < min ? fx.date : min, fxs[0].date);
-        const d = new Date(firstDate + "T12:00:00");
-        const day = d.getDay(); // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
-        // Find the Wednesday before the first game of this MW.
-        // PL weeks run Fri/Sat/Sun, so we want the Wed immediately preceding:
-        // Wed(3)→0, Thu(4)→1, Fri(5)→2, Sat(6)→3, Sun(0)→4, Mon(1)→5, Tue(2)→6
-        // Mon and Tue are unusual (e.g. midweek fixtures) — use previous Wed
-        const daysBack = ((day + 4) % 7);  // rotates: Wed=0,Thu=1,Fri=2,Sat=3,Sun=4,Mon=5,Tue=6
-        d.setDate(d.getDate() - daysBack);
-        let deadline = `${d.toLocaleDateString("en-CA")}T20:00`;
-        // Safety: if two MWs land on same Wednesday, push second one back one week
+        const info = ukWeekDeadlineInfo(built[mwNum]);
+        if (!info) return;
+        let deadline = info.deadline;
+        // Safety: if two MWs land on the same deadline, push the second one back one week
         while (usedDeadlines.has(deadline)) {
-          d.setDate(d.getDate() - 7);
-          deadline = `${d.toLocaleDateString("en-CA")}T20:00`;
+          deadline = ukAddDays(deadline.slice(0,10), -7) + deadline.slice(10);
         }
         usedDeadlines.add(deadline);
         autoDeadlines[mwNum] = deadline;
@@ -892,7 +908,7 @@ async function liveRefresh(fixtures, mwOverrides) {
         supa.getState("deadlines").then(existing => {
           if (!existing || Object.keys(existing).length === 0) {
             supa.setState("deadlines", autoDeadlines).catch(()=>{});
-            console.log("✅ Auto-set deadlines (Wed 19:00 before each MW)");
+            console.log(`✅ Auto-set deadlines (${DEADLINE_RULE_TEXT}):`, autoDeadlines);
           }
         }).catch(()=>{});
         return {
@@ -1060,21 +1076,16 @@ async function liveRefresh(fixtures, mwOverrides) {
       // Supabase record, so a newly-discovered week would otherwise only be visible on
       // whichever single device happened to trigger the refresh that found it.
       supa.setState("live_fixtures", newFx).catch(e => console.log("live_fixtures save failed:", e.message));
-      // Auto-set a deadline for each new week (Wed 20:00 before its first game — same
-      // rule as the season build) — but only if that week doesn't already have one, so
+      // Auto-set a deadline for each new week (same rule as the season build: Wed 21:00,
+      // or 1h before the first kick-off if earlier) — but only if that week doesn't already have one, so
       // this never overwrites a deadline admin has already set or corrected.
       supa.getState("deadlines").then(existingDl => {
         const dl = existingDl || {};
         const newDl = {};
         newlyDiscoveredWeeks.forEach(mwNum => {
           if (dl[mwNum]) return;
-          const fxs = newFx[mwNum];
-          const firstDate = fxs.reduce((min, fx) => fx.date < min ? fx.date : min, fxs[0].date);
-          const d = new Date(firstDate + "T12:00:00");
-          const day = d.getDay();
-          const daysBack = ((day + 4) % 7);
-          d.setDate(d.getDate() - daysBack);
-          newDl[mwNum] = `${d.toLocaleDateString("en-CA")}T20:00`;
+          const info = ukWeekDeadlineInfo(newFx[mwNum]);
+          if (info) newDl[mwNum] = info.deadline;
         });
         if (Object.keys(newDl).length > 0) saveMapPatch("deadlines", newDl).catch(()=>{});
       }).catch(()=>{});
@@ -2293,6 +2304,53 @@ function App(){
     }
   },[supaLoading,displayFixtures,reveals,predictions,players,fixtureDeadlines]);
 
+  // ONE-TIME MIGRATION to the new deadline rule (Wed 21:00, or 1h before the first
+  // kick-off if a game starts earlier). Runs once ever (guarded by a flag stored in
+  // Supabase): every FUTURE week that already has a deadline — not locked, deadline not
+  // yet passed — is recalculated and overwritten, which also pulls it earlier where a
+  // game starts sooner. Past and locked weeks are never touched. If a recalculated
+  // deadline would duplicate another week's, that week keeps its existing deadline
+  // (only pulled earlier if a game starts before it). Each change is written to the
+  // deadline audit log as "auto-migration".
+  useEffect(()=>{
+    if(supaLoading||_dlMigrationRan) return;
+    if(!Object.values(displayFixtures||{}).some(l=>l&&l.length)) return; // fixtures not loaded yet
+    _dlMigrationRan=true;
+    (async()=>{
+      try{
+        const FLAG="deadline_rule_migration_v1";
+        if(await supa.getState(FLAG)) return; // already done
+        const dl=(await supa.getState("deadlines"))||{};
+        const rv=(await supa.getState("reveals"))||{};
+        const now=new Date();
+        const used=new Set(), future=[];
+        Object.keys(dl).map(Number).sort((a,b)=>a-b).forEach(w=>{
+          const d=ukWallToDate(dl[w]);
+          const isFuture=!rv[w] && !isNaN(d) && d>now && (displayFixtures[w]||[]).length>0;
+          if(isFuture) future.push(w); else if(dl[w]) used.add(dl[w]);
+        });
+        const patch={};
+        future.forEach(w=>{
+          const info=ukWeekDeadlineInfo(displayFixtures[w]);
+          if(!info) return;
+          let next=info.deadline;
+          if(used.has(next)) next=ukWallToDate(dl[w])>info.cap?dateToUKWall(info.cap):dl[w];
+          used.add(next);
+          if(next!==dl[w]) patch[w]=next;
+        });
+        const changed=Object.keys(patch);
+        if(changed.length){
+          const nd={...dl,...patch};
+          setDeadlines(nd);
+          saveAll({dl:nd},{dl:patch});
+          for(const w of changed) await logDeadlineChange(w,dl[w],patch[w],"auto-migration",null);
+        }
+        await supa.setState(FLAG,{ts:new Date().toISOString(),weeks:changed.map(Number)});
+        console.log(`✅ Deadline migration (${DEADLINE_RULE_TEXT}): ${changed.length} future week(s) updated`,patch);
+      }catch(e){ console.log("Deadline migration failed (will retry next load):",e.message); }
+    })();
+  },[supaLoading,displayFixtures]);
+
   // Joker helpers - check saved predictions for joker usage
   const jokersUsed=(p,h)=>{
     const pPreds=predictions[p]||{};
@@ -3218,12 +3276,11 @@ function Predict({seasonActual,fixtures,displayFixtures,predictions,reveals,publ
                 const dl=fmtUKFull(ukWallToDate(deadlines[mw]));
                 return <span>📅 {dl}</span>;
               }
-              // Compute suggested deadline: Friday 19:00 BST of MW week
+              // Suggested deadline: Wed 21:00, or 1h before the first kick-off if earlier
               const fxList=(displayFixtures||fixtures)[mw]||[];
-              const dates=fxList.map(fx=>new Date(fx.currentDate||fx.date)).filter(d=>!isNaN(d));
-              if(!dates.length) return <span style={{color:"#64748B"}}>Not set</span>;
-              const earliest=new Date(Math.min(...dates.map(d=>d.getTime())));
-              const sugStr=fmtUKFull(ukWallToDate(ukSuggestWedDeadline(earliest)));
+              const sugInfo=ukWeekDeadlineInfo(fxList);
+              if(!sugInfo) return <span style={{color:"#64748B"}}>Not set</span>;
+              const sugStr=fmtUKFull(ukWallToDate(sugInfo.deadline));
               return <span style={{color:"#64748B",fontWeight:600}}>{sugStr} <span style={{fontSize:10,color:"#475569"}}>(suggested)</span></span>;
             })()}
             {deadlines[mw]&&!past&&!revealed&&(()=>{
@@ -5876,11 +5933,10 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
               <div style={{fontSize:11,color:"#64748B",marginBottom:4}}>Prediction deadline</div>
               {(()=>{
                 const fxList=(displayFixtures||fixtures)[ew]||[];
-                const dates=fxList.map(fx=>new Date(fx.currentDate||fx.date)).filter(d=>!isNaN(d));
-                if(!dates.length) return null;
-                const earliest=new Date(Math.min(...dates.map(d=>d.getTime())));
-                const suggestedISO=ukSuggestWedDeadline(earliest);
-                const suggestedDisplay=ukWallToDate(suggestedISO).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",timeZone:"Europe/London"})+" 20:00";
+                const sugInfo=ukWeekDeadlineInfo(fxList);
+                if(!sugInfo) return null;
+                const suggestedISO=sugInfo.deadline;
+                const suggestedDisplay=ukWallToDate(suggestedISO).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",timeZone:"Europe/London"})+" "+suggestedISO.slice(11,16)+(sugInfo.capped?` (${DEADLINE_LEAD_TEXT} before first kick-off)`:"");
                 return(
                   <button style={{...S.sb,marginBottom:6,fontSize:12,color:"#F59E0B",border:"1px solid #F59E0B44",display:"block",width:"100%"}}
                     onClick={()=>{
@@ -6111,7 +6167,7 @@ function Admin({fixtures,displayFixtures,setFixtures,predictions,setPredictions,
         </div>
         <div style={{...S.card,background:"#1A0A00",border:"1px solid #78350F",padding:"12px 16px"}}>
           <div style={{fontSize:13,fontWeight:700,color:"#F59E0B",marginBottom:4}}>🔧 Rebuild Fixtures</div>
-          <div style={{fontSize:11,color:"#92400E",marginBottom:8}}>Clears saved fixtures and rebuilds from ESPN — redistributes all games into 38 MWs of exactly 10 games each, sorted by date. Also auto-sets Wednesday 7pm deadlines. Only use if MW distribution is wrong.</div>
+          <div style={{fontSize:11,color:"#92400E",marginBottom:8}}>Clears saved fixtures and rebuilds from ESPN — redistributes all games into 38 MWs of exactly 10 games each, sorted by date. Also auto-sets each week's deadline ({DEADLINE_RULE_TEXT}). Only use if MW distribution is wrong.</div>
           <button style={{...S.sb,background:"#78350F",color:"#FCD34D",border:"1px solid #F59E0B",padding:"8px 14px",fontSize:13,fontWeight:700,width:"100%"}}
             onClick={async()=>{
               if(!window.confirm("This clears ALL saved fixtures and deadlines, then rebuilds from ESPN. Any manually-set deadlines will be lost. Are you sure?")) return;
