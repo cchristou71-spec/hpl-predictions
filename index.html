@@ -7786,16 +7786,16 @@ function SeasonTab({players, me, seasonPreds, setSeasonPreds, seasonActual, seas
                   </span>
                   <div style={{flex:1}}>
                     <div style={{display:"flex",alignItems:"baseline",gap:8}}>
-                      <span style={{fontWeight:700,fontSize:15,color:playerColour(p)}}>
+                      <span style={{fontWeight:700,fontSize:15,color:playerColour(p),flex:1,minWidth:0}}>
                         {p}{p===me?" 👤":""}
                       </span>
                       {hasPred && visible && (
-                        <span style={{fontSize:22,fontWeight:800,color:playerColour(p),lineHeight:1}}>
-                          {pts!==null ? pts : "–"}
+                        <span style={{display:"inline-flex",alignItems:"baseline",justifyContent:"flex-end",gap:6,width:84,flexShrink:0}}>
+                          <span style={{fontSize:22,fontWeight:800,color:playerColour(p),lineHeight:1}}>
+                            {pts!==null ? pts : "–"}
+                          </span>
+                          {pts!==null && <span style={{fontSize:11,color:"#64748B",fontWeight:600,width:20}}>pts</span>}
                         </span>
-                      )}
-                      {hasPred && visible && pts!==null && (
-                        <span style={{fontSize:11,color:"#64748B",fontWeight:600}}>pts</span>
                       )}
                     </div>
                     {hasPred && visible && pts===null && (
